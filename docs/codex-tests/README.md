@@ -12,3 +12,5 @@ result into `.Codex/plan-checkpoint.md` and `memory/`.
 ## Index
 - [`A4-dashboard-verification.md`](A4-dashboard-verification.md) — dashboard board, add/paste,
   edit, stage-change, detail, stale surfacing, owner CRUD + cross-UID RLS. **Status: pending.**
+- [`A5-outcomes-privacy-verification.md`](A5-outcomes-privacy-verification.md) — outcome logging,
+  future-date guard, outcome→stage move, privacy-log screen, owner/cross-UID RLS. **Status: pending.**

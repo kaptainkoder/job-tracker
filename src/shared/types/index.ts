@@ -77,6 +77,7 @@ export interface PrivacyLogEntry {
   application_id: string | null;
   target: 'openrouter' | 'enhancecv';
   action: string; // 'tailor-resume' | 'cover-letter' | 'prep-questions' | ...
+  model: string | null; // LLM model used (e.g. 'anthropic/claude-sonnet-4-6'); added in 0002
   // What categories of data were sent + what was withheld (plain-English manifest).
   sent_manifest: string[];
   withheld_manifest: string[];
