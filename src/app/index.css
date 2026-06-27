@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Semantic-token color channels as space-separated RGB, consumed by the Tailwind
+     config via rgb(var(--token) / <alpha-value>). :root = LIGHT, .dark overrides.
+     Flipping these flips every token usage (and its /40 /20 opacity modifiers) at once.
+     `stage-*` tokens are this app's job-application pipeline stages. */
+  :root {
+    --canvas: 255 255 255;
+    --surface: 255 255 255;
+    --accent: 74 143 203;
+    --accent-soft: 220 234 246;
+    --accent-muted: 156 192 224;
+    --ink: 14 47 77;
+    --ink-soft: 62 93 120;
+    --ink-faint: 123 147 168;
+    --stage-lead: 138 166 191;        /* blue-grey — just landed / unqualified */
+    --stage-applied: 74 143 203;      /* accent blue — in flight */
+    --stage-interviewing: 217 148 37; /* amber — active / hot */
+    --stage-offer: 63 157 109;        /* green — success */
+    --stage-rejected: 192 116 116;    /* muted red — closed, not deleted */
+  }
+  .dark {
+    --canvas: 11 22 32;
+    --surface: 19 33 46;
+    --accent: 91 159 214;
+    --accent-soft: 27 50 71;
+    --accent-muted: 47 77 104;
+    --ink: 230 238 246;
+    --ink-soft: 159 180 200;
+    --ink-faint: 111 132 151;
+    --stage-lead: 126 152 176;
+    --stage-applied: 91 159 214;
+    --stage-interviewing: 224 162 58;
+    --stage-offer: 76 174 125;
+    --stage-rejected: 200 128 128;
+  }
+  html {
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    @apply bg-canvas text-ink font-sans;
+  }
+  *:focus-visible {
+    @apply outline-none ring-2 ring-accent ring-offset-2 ring-offset-white dark:ring-offset-canvas;
+    border-radius: 0.5rem;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-surface rounded-2xl shadow-card border border-accent-soft/40;
+  }
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+  .input {
+    @apply block w-full rounded-lg border border-accent-soft bg-accent-soft/20 px-3 py-2 text-sm text-ink outline-none transition focus:border-accent focus-visible:ring-2 focus-visible:ring-accent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
