@@ -59,6 +59,30 @@ Last verified: 2026-06-27.
    The anon key is designed to be public; RLS is the security boundary. Server-side
    `SUPABASE_SERVICE_ROLE_KEY` remains unset, so `/api/health` still reports
    `schemaReachable:null` until that optional deep-readiness probe is wired.
+7. **Verify A3 owner profile + private resume:** local app → `/profile` → fill **Personal
+   details**, **Current role**, and **Professional links** → **Save profile** → refresh `/profile`
+   and confirm the saved values return. Under **Base resume** → **Upload PDF** → choose the base
+   resume → confirm `base-resume.pdf is securely stored` → **Download** and confirm the download
+   completes. The app writes one `profile` row keyed by the auth UID and stores the file at
+   `<uid>/base-resume.pdf` in the private `resumes` bucket. Verified 2026-06-28 with the owner
+   session: create/read/update, refresh persistence, upload/replace state, and authenticated
+   download all succeeded.
+8. **Verify A3 RLS isolation:** first run an anon REST read with the project URL + anon key; after
+   the owner row exists, `GET /rest/v1/profile?select=id` must still return HTTP 200 with `[]`, and
+   `GET /storage/v1/object/resumes/<uid>/base-resume.pdf` must fail. For a cross-UID authenticated
+   proof: Supabase Dashboard → project `job_tracker` → **SQL Editor** → **Create a new query** →
+   paste the rollback-only probe below → **Run**. Expected result is PostgreSQL `42501: new row
+   violates row-level security policy for table "profile"`; no row is written.
+   ```sql
+   begin;
+   set local role authenticated;
+   select set_config('request.jwt.claim.sub', '00000000-0000-4000-8000-000000000001', true);
+   insert into public.profile (id, full_name)
+   values ('<owner-auth-uid>', 'RLS probe — must never persist');
+   rollback;
+   ```
+   Verified 2026-06-28: anon profile read returned `[]`; anon resume request returned HTTP 400;
+   cross-UID insert returned `42501`.
 
 Last verified: 2026-06-28 by Codex session (dashboard + REST RLS check).
 
