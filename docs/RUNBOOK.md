@@ -43,8 +43,12 @@ Last verified: 2026-06-27.
    Configuration:** Site URL = `http://localhost:5173` for dev; under **Redirect URLs** add the
    prod URL `https://job-tracker-sage-two.vercel.app/**` (now known — deployed 2026-06-27).
    (Wrong Site URL / Redirect URLs = #1 cause of broken links.)
-5. **Apply the migration** (after chunk A1 produces `supabase/migrations/0001_init.sql`):
-   **SQL Editor → paste the SQL → Run**, or via the Supabase CLI if the project gets linked.
+5. **Apply the migration** (`supabase/migrations/0001_init.sql` — exists as of A1):
+   **SQL Editor → New query → paste the whole file → Run** (or `supabase db push` if CLI-linked).
+   This one file creates **all 5 tables + RLS + the `resumes` storage bucket and its policies** —
+   no need to create the bucket by hand. Verify: **Table Editor** shows `profile`, `applications`,
+   `interview_events`, `outcomes`, `privacy_log`; **Storage** shows a private `resumes` bucket.
+   Once env is also set on Vercel, `/api/health` flips `schemaReachable` from `null` → `true`.
 
 Gotcha: free projects pause after ~7 days idle — first load after a quiet week is slow.
 

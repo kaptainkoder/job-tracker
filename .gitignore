@@ -22,3 +22,4 @@ brainstorms/
 
 # private fixtures (real/redacted data the public tree shouldn't carry)
 fixtures/private/
+.vercel

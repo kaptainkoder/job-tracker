@@ -1,0 +1,16 @@
+Senior Platform Engineer at Acme Corp
+Location: Remote (US) · Full-time
+Apply: https://jobs.acme.example.com/postings/senior-platform-engineer
+
+About the role
+Acme Corp is hiring a Senior Platform Engineer to own our internal developer
+platform — CI/CD, infrastructure-as-code, and the Kubernetes layer that every
+product team builds on. You'll partner with staff engineers across the org to
+make shipping safe, fast, and boring.
+
+What you'll do
+- Design and operate the deployment pipeline used by 40+ engineers
+- Own the Terraform modules and the service-catalog golden paths
+- Reduce mean-time-to-recovery through better observability
+
+Compensation: $150,000–$185,000 base, plus equity and benefits.

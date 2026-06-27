@@ -1,0 +1,14 @@
+Data Engineer at Globex
+Location: Hybrid — Berlin · Full-time
+
+We're looking for a Data Engineer to build and maintain the batch and streaming
+pipelines behind our analytics platform. You'll work in Python and SQL, own data
+quality end to end, and collaborate closely with analysts and product managers.
+
+Responsibilities
+- Build reliable ETL/ELT pipelines on our cloud warehouse
+- Model data for self-serve analytics
+- Mentor analysts on SQL best practices
+
+We don't list a salary range in this posting — ask the recruiter for the band.
+Benefits include flexible hours, a learning budget, and generous leave.
