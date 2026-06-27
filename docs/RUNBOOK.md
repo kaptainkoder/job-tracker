@@ -22,8 +22,8 @@
 Last verified: 2026-06-27.
 
 ## Database / auth provider — Supabase (fresh project)
-> Karan does steps 1–4 in the dashboard; agent applies the migration (step 5) once it exists.
-> Status: walked through 2026-06-27; mark "Last verified" once the app authenticates against it.
+> Project `job_tracker` (`bagecwuhpzaujioucjrt`). Migration and browser auth configuration
+> verified in the live dashboard on 2026-06-28.
 
 1. **Create project:** https://supabase.com/dashboard → confirm correct **org** (top-left) →
    **New project**. Name `job-tracker`; **Generate a password** → save it in a password manager;
@@ -37,18 +37,30 @@ Last verified: 2026-06-27.
    VITE_SUPABASE_ANON_KEY=<anon-public-key>
    ```
    The `VITE_` prefix is required for Vite to expose them to the browser.
-4. **Magic-link auth:** **Authentication → Sign In / Providers → Email** = **enabled** (this alone
-   permits magic-link; the app calls `signInWithOtp`). Then critically set **"Allow new users to
-   sign up" = ON** (else the first link sends but login fails — no account to create). **URL
-   Configuration:** Site URL = `http://localhost:5173` for dev; under **Redirect URLs** add the
-   prod URL `https://job-tracker-sage-two.vercel.app/**` (now known — deployed 2026-06-27).
-   (Wrong Site URL / Redirect URLs = #1 cause of broken links.)
-5. **Apply the migration** (`supabase/migrations/0001_init.sql` — exists as of A1):
+4. **Magic-link auth:** **Authentication → Sign In / Providers** → under **User Signups**, set
+   **Allow new users to sign up = ON** and **Confirm email = ON** → under **Auth Providers**,
+   confirm **Email = Enabled**. Then **Authentication → URL Configuration** → set **Site URL** =
+   `http://localhost:5173` → **Redirect URLs → Add URL** → add both
+   `http://localhost:5173/**` and `https://job-tracker-sage-two.vercel.app/**` → **Save URLs**.
+   Verified state: Email enabled, signups on, confirm-email on, 2 redirect URLs. End-to-end check:
+   **app `/sign-in` → enter owner email → Email me a link → Gmail → Log In** opened `/tracker`;
+   refresh kept the session; **Sign out** returned `/`; opening `/profile` redirected to
+   `/sign-in?next=%2Fprofile` (verified 2026-06-28).
+5. **Apply the migration** (`supabase/migrations/0001_init.sql`; applied 2026-06-28):
    **SQL Editor → New query → paste the whole file → Run** (or `supabase db push` if CLI-linked).
    This one file creates **all 5 tables + RLS + the `resumes` storage bucket and its policies** —
-   no need to create the bucket by hand. Verify: **Table Editor** shows `profile`, `applications`,
-   `interview_events`, `outcomes`, `privacy_log`; **Storage** shows a private `resumes` bucket.
-   Once env is also set on Vercel, `/api/health` flips `schemaReachable` from `null` → `true`.
+   no need to create the bucket by hand. Verified: **Table Editor** shows `profile`, `applications`,
+   `interview_events`, `outcomes`, `privacy_log`; **Storage → Files** shows `resumes`; an anon REST
+   read returns `[]`, while an anon insert is rejected with PostgreSQL `42501` (RLS enforced).
+6. **Vercel browser env:** from the linked project folder, run
+   `vercel env add VITE_SUPABASE_URL production` and
+   `vercel env add VITE_SUPABASE_ANON_KEY production`, then repeat with `development`. These four
+   entries were set 2026-06-28. Preview env was intentionally left unset (no preview-branch flow).
+   The anon key is designed to be public; RLS is the security boundary. Server-side
+   `SUPABASE_SERVICE_ROLE_KEY` remains unset, so `/api/health` still reports
+   `schemaReachable:null` until that optional deep-readiness probe is wired.
+
+Last verified: 2026-06-28 by Codex session (dashboard + REST RLS check).
 
 Gotcha: free projects pause after ~7 days idle — first load after a quiet week is slow.
 

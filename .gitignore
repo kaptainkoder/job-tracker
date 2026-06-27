@@ -17,6 +17,7 @@ build/
 # agent working files — kept on disk, out of the repo's mental model (calm root).
 # Flip these back on if you want them tracked for cross-device backup.
 .claude/
+.Codex/
 memory/
 brainstorms/
 

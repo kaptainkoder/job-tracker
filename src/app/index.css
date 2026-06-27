@@ -8,27 +8,37 @@
      Flipping these flips every token usage (and its /40 /20 opacity modifiers) at once.
      `stage-*` tokens are this app's job-application pipeline stages. */
   :root {
-    --canvas: 255 255 255;
+    --canvas: 251 251 252;
     --surface: 255 255 255;
-    --accent: 74 143 203;
-    --accent-soft: 220 234 246;
+    --surface-2: 246 247 249;
+    --surface-3: 241 243 245;
+    --border: 233 235 238;
+    --border-soft: 240 241 243;
+    --accent: 59 125 216;
+    --accent-strong: 46 107 192;
+    --accent-soft: 234 241 251;
     --accent-muted: 156 192 224;
-    --ink: 14 47 77;
-    --ink-soft: 62 93 120;
-    --ink-faint: 123 147 168;
+    --ink: 26 29 33;
+    --ink-soft: 91 100 112;
+    --ink-faint: 152 161 173;
     --stage-lead: 138 166 191;        /* blue-grey — just landed / unqualified */
     --stage-applied: 74 143 203;      /* accent blue — in flight */
-    --stage-interviewing: 217 148 37; /* amber — active / hot */
+    --stage-interviewing: 194 138 42; /* amber — active / hot */
     --stage-offer: 63 157 109;        /* green — success */
-    --stage-rejected: 192 116 116;    /* muted red — closed, not deleted */
+    --stage-rejected: 184 107 107;    /* muted red — closed, not deleted */
   }
   .dark {
-    --canvas: 11 22 32;
-    --surface: 19 33 46;
+    --canvas: 11 17 23;
+    --surface: 19 28 38;
+    --surface-2: 15 24 34;
+    --surface-3: 24 36 49;
+    --border: 35 48 61;
+    --border-soft: 26 37 48;
     --accent: 91 159 214;
+    --accent-strong: 125 180 226;
     --accent-soft: 27 50 71;
     --accent-muted: 47 77 104;
-    --ink: 230 238 246;
+    --ink: 231 238 246;
     --ink-soft: 159 180 200;
     --ink-faint: 111 132 151;
     --stage-lead: 126 152 176;
@@ -44,20 +54,20 @@
     @apply bg-canvas text-ink font-sans;
   }
   *:focus-visible {
-    @apply outline-none ring-2 ring-accent ring-offset-2 ring-offset-white dark:ring-offset-canvas;
+    @apply outline-none ring-2 ring-accent ring-offset-2 ring-offset-canvas;
     border-radius: 0.5rem;
   }
 }
 
 @layer components {
   .card {
-    @apply bg-surface rounded-2xl shadow-card border border-accent-soft/40;
+    @apply rounded-2xl border border-line bg-surface shadow-card;
   }
   .pill {
     @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium;
   }
   .input {
-    @apply block w-full rounded-lg border border-accent-soft bg-accent-soft/20 px-3 py-2 text-sm text-ink outline-none transition focus:border-accent focus-visible:ring-2 focus-visible:ring-accent;
+    @apply block w-full rounded-xl border border-line bg-surface-2 px-3 py-2.5 text-sm text-ink outline-none transition placeholder:text-ink-faint focus:border-accent focus-visible:ring-2 focus-visible:ring-accent;
   }
 }
 

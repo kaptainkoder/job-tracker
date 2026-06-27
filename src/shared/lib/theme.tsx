@@ -10,9 +10,9 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-// Dark page chrome for the theme-color meta (light value stays #f3f7fc, set in HTML).
-const DARK_THEME_COLOR = '#0b1620';
-const LIGHT_THEME_COLOR = '#f3f7fc';
+// Keep installed-PWA browser chrome aligned with the design canvas in either theme.
+const DARK_THEME_COLOR = '#0b1117';
+const LIGHT_THEME_COLOR = '#fbfbfc';
 
 function applyTheme(t: Theme) {
   const root = document.documentElement;

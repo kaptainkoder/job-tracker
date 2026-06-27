@@ -12,8 +12,15 @@ export default {
       colors: {
         canvas: 'rgb(var(--canvas) / <alpha-value>)',
         surface: 'rgb(var(--surface) / <alpha-value>)',
+        'surface-2': 'rgb(var(--surface-2) / <alpha-value>)',
+        'surface-3': 'rgb(var(--surface-3) / <alpha-value>)',
+        line: {
+          DEFAULT: 'rgb(var(--border) / <alpha-value>)',
+          soft: 'rgb(var(--border-soft) / <alpha-value>)',
+        },
         accent: {
           DEFAULT: 'rgb(var(--accent) / <alpha-value>)',
+          strong: 'rgb(var(--accent-strong) / <alpha-value>)',
           soft: 'rgb(var(--accent-soft) / <alpha-value>)',
           muted: 'rgb(var(--accent-muted) / <alpha-value>)',
         },
@@ -36,6 +43,7 @@ export default {
       boxShadow: {
         card: '0 1px 3px rgba(14, 47, 77, 0.06), 0 1px 2px rgba(14, 47, 77, 0.04)',
         cardHover: '0 4px 14px rgba(14, 47, 77, 0.10)',
+        panel: '0 12px 40px rgba(20, 30, 45, 0.14)',
       },
       borderRadius: {
         xl: '0.875rem',
