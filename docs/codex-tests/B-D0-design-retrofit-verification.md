@@ -1,5 +1,9 @@
 # B-D0 — design-retrofit production verification (for Codex)
 
+> **Run status (2026-06-28): partial, bug found.** Desktop/light/dark checks passed; the
+> future-date regression still failed. Mobile, stale-card, and Edit-form portions remain to run.
+> Full evidence: [`B-D0-live-verification-2026-06-28.md`](B-D0-live-verification-2026-06-28.md).
+
 **Why this exists:** Claude Code shipped B-D0 (commit `e49f5a4`, prod
 `https://job-tracker-sage-two.vercel.app`) but had no paired Chrome extension to verify the new
 UI itself. Run the checks below signed in as the owner, in **both light and dark**, and report

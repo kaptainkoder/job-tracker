@@ -1,5 +1,10 @@
 # B0 — Settings + streaming `/api/llm` production verification (for Codex)
 
+> **Run status (2026-06-28): partial, authorization bug found.** Settings persistence, streaming,
+> real ping, Stop, secret scan, RLS, and desktop design passed. A forged Bearer string is accepted;
+> mobile nav and server egress tracing remain. Full evidence:
+> [`B0-live-verification-2026-06-28.md`](B0-live-verification-2026-06-28.md).
+
 **Why this exists:** Claude Code shipped B0 (Settings page, `user_settings` migration `0003`,
 and the streaming `api/llm.ts` skeleton) but had no paired Chrome extension to drive the live
 authenticated UI or watch tokens stream. Run the checks below **signed in as the owner** on prod

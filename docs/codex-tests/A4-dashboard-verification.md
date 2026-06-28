@@ -1,6 +1,11 @@
 # Codex prompt — A4 Dashboard authenticated verification
 
-**Status:** pending (Codex usage was out at ship time).
+**Status:** run once via Codex 2026-06-28 (`A4-A5-live-verification-2026-06-28.md`). This prompt
+was **corrected 2026-06-28** to match the approved A4 criteria — the prior version had two stale
+expectations (it demanded Stage=`Applied` after parsing and all five sections on an empty board;
+both contradicted the approved criteria, so they produced false ❌s). Re-run after Wave B **B-D0**,
+which rebuilds the board as a per-stage **Kanban** dashboard — steps 1 and 4 will need re-wording
+for columns at that point.
 **Shipped commit:** `18fd577` — `feat: A4 — dashboard board, add/edit, stale surfacing`.
 **Target:** production `https://job-tracker-sage-two.vercel.app` (or local `npm run dev` →
 `http://localhost:5173` if you prefer; both hit the same live Supabase project
@@ -22,11 +27,15 @@ Already proven by Claude Code (do NOT re-do, just be aware):
 > application row you create during the test so the board ends as it started.
 >
 > Run these checks:
-> 1. **Empty/initial state** — load `/tracker`. Note whether the board renders all five stage
->    sections (Lead, Applied, Interviewing, Offer, Rejected) and the "Add application" button.
+> 1. **Empty/initial state** — load `/tracker` with no applications. Confirm a clean **zero-apps
+>    empty state** renders (with the "Add application" / "Add your first application" entry point).
+>    Per the approved criteria, the five stage sections do NOT need to appear when there are zero
+>    applications — a single empty state is correct. (Stage sections appear once rows exist.)
 > 2. **Paste quick-add** — click Add application; into the paste box put the clean JD below;
 >    click **Parse**. Confirm it prefills Company=`Acme Corp`, Role=`Senior Platform Engineer`,
->    a job link, currency `USD`, and Stage=`Applied`. Leave salary min/max blank. Save.
+>    a job link, and currency `USD`. **Stage must stay `Lead`** (quick-add defaults `lead`; you
+>    advance stage manually later). Salary min/max stay blank (the parser fills currency only, not
+>    amounts). Save.
 >    Paste JD:
 >    ```
 >    Senior Platform Engineer at Acme Corp
@@ -36,7 +45,9 @@ Already proven by Claude Code (do NOT re-do, just be aware):
 > 3. **Salary "unspecified"** — add a second application manually: Company=`Globex`,
 >    Role=`Data Engineer`, leave salary blank, Stage=`Lead`. Confirm its card shows salary as
 >    **"unspecified"** (never a guessed number).
-> 4. **Board grouping** — confirm the Acme card sits under **Applied** and Globex under **Lead**.
+> 4. **Board grouping** — both Acme and Globex default to **Lead**, so confirm both cards render
+>    under the **Lead** group and the board groups cards by stage. (Regrouping after a stage change
+>    is verified in step 6, where Globex moves to Applied and should jump to the Applied group.)
 > 5. **Edit** — open the Globex card → Edit; change Role to `Senior Data Engineer`; save;
 >    confirm the card updates.
 > 6. **Stage change + date_applied** — on the Globex detail, change stage from Lead → Applied
@@ -70,10 +81,10 @@ Tested: <prod | local> · <UTC timestamp> · signed in as owner: <yes/no>
 
 | # | Check | Result | Notes |
 |---|-------|--------|-------|
-| 1 | Five stage sections + Add button | ✅/❌ | … |
-| 2 | Paste quick-add prefill (company/role/link/USD/Applied) | ✅/❌ | … |
+| 1 | Zero-apps empty state + Add button | ✅/❌ | … |
+| 2 | Paste quick-add prefill (company/role/link/USD; stage stays Lead; amounts blank) | ✅/❌ | … |
 | 3 | Blank salary → "unspecified" | ✅/❌ | … |
-| 4 | Board grouping (Acme→Applied, Globex→Lead) | ✅/❌ | … |
+| 4 | Board grouping (both under Lead; regroups after stage change in step 6) | ✅/❌ | … |
 | 5 | Edit persists | ✅/❌ | … |
 | 6 | Stage change sets date_applied + bumps activity | ✅/❌ | … |
 | 7 | Detail view + job link opens | ✅/❌ | … |
