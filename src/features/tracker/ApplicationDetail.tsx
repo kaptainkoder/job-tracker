@@ -8,8 +8,10 @@ import {
 } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import type { Application, Outcome, Stage } from '../../shared/types';
-import { STAGES, STAGE_LABEL, STAGE_PILL, STAGE_DOT, isStale } from '../../shared/domain/stages';
+import { STAGES, STAGE_LABEL, isStale } from '../../shared/domain/stages';
 import { supabase } from '../../shared/lib/supabase';
+import Button from '../../shared/ui/Button';
+import StagePill from '../../shared/ui/StagePill';
 import { useAuth } from '../auth/AuthProvider';
 import {
   OUTCOME_KINDS,
@@ -19,6 +21,7 @@ import {
   outcomeFormToPayload,
   sortOutcomesDesc,
   suggestedStageForOutcome,
+  todayISODate,
   validateOutcomeForm,
   type OutcomeFieldErrors,
   type OutcomeFormValues,
@@ -163,12 +166,9 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
             <h3 className="text-xl font-semibold text-ink">{application.company}</h3>
             <p className="text-sm text-ink-soft">{application.role}</p>
             <div className="mt-2 flex flex-wrap items-center gap-2">
-              <span className={`pill ${STAGE_PILL[application.stage]}`}>
-                <span className={`h-1.5 w-1.5 rounded-full ${STAGE_DOT[application.stage]}`} />
-                {STAGE_LABEL[application.stage]}
-              </span>
+              <StagePill stage={application.stage} />
               {stale && (
-                <span className="pill bg-stage-applied/15 text-stage-applied">
+                <span className="pill bg-stage-interviewing/15 text-stage-interviewing">
                   <AlarmClock className="h-3 w-3" /> needs follow-up
                 </span>
               )}
@@ -179,9 +179,9 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
             <select id="stage-select" value={application.stage} disabled={busy} onChange={(e) => changeStage(e.target.value as Stage)} className="input w-auto py-2">
               {STAGES.map((s) => <option key={s} value={s}>{STAGE_LABEL[s]}</option>)}
             </select>
-            <button type="button" onClick={onEdit} className="inline-flex items-center gap-1.5 rounded-xl border border-line bg-surface px-3 py-2 text-sm font-medium text-ink-soft transition hover:bg-surface-2 hover:text-ink">
+            <Button variant="secondary" onClick={onEdit}>
               <Pencil className="h-4 w-4" /> Edit
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -206,9 +206,9 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
           <div className="mb-2 flex items-center justify-between">
             <h4 id="outcomes-heading" className="text-sm font-semibold text-ink">Outcomes</h4>
             {!logging && (
-              <button type="button" onClick={() => { setLogging(true); setForm(emptyOutcomeForm()); }} className="inline-flex items-center gap-1.5 rounded-xl border border-line bg-surface px-2.5 py-1.5 text-xs font-medium text-ink-soft transition hover:bg-surface-2 hover:text-ink">
+              <Button variant="secondary" size="sm" onClick={() => { setLogging(true); setForm(emptyOutcomeForm()); }}>
                 <Plus className="h-3.5 w-3.5" /> Log outcome
-              </button>
+              </Button>
             )}
           </div>
 
@@ -223,7 +223,7 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
                 </div>
                 <div>
                   <label htmlFor="outcome-date" className="text-xs font-medium text-ink-soft">Date</label>
-                  <input id="outcome-date" type="date" value={form.occurred_on} onChange={(e) => updateForm('occurred_on', e.target.value)} className={`input mt-1.5 ${formErrors.occurred_on ? 'border-stage-rejected' : ''}`} />
+                  <input id="outcome-date" type="date" max={todayISODate()} value={form.occurred_on} onChange={(e) => updateForm('occurred_on', e.target.value)} className={`input mt-1.5 ${formErrors.occurred_on ? 'border-stage-rejected' : ''}`} />
                   {formErrors.occurred_on && <span className="mt-1 block text-xs text-stage-rejected">{formErrors.occurred_on}</span>}
                 </div>
               </div>
@@ -238,10 +238,10 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
                 </label>
               )}
               <div className="mt-3 flex justify-end gap-2">
-                <button type="button" onClick={() => { setLogging(false); setFormErrors({}); }} className="rounded-xl border border-line bg-surface px-3 py-2 text-sm font-medium text-ink-soft hover:bg-surface-2">Cancel</button>
-                <button type="submit" disabled={savingOutcome} className="inline-flex items-center gap-1.5 rounded-xl bg-accent px-3 py-2 text-sm font-medium text-white transition hover:bg-accent-strong disabled:cursor-wait disabled:opacity-60">
+                <Button variant="secondary" onClick={() => { setLogging(false); setFormErrors({}); }}>Cancel</Button>
+                <Button type="submit" disabled={savingOutcome}>
                   {savingOutcome && <LoaderCircle className="h-4 w-4 animate-spin" />} Log
-                </button>
+                </Button>
               </div>
             </form>
           )}
@@ -272,15 +272,15 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
           {confirmDelete ? (
             <div className="flex items-center gap-2">
               <span className="text-sm text-ink-soft">Delete this application?</span>
-              <button type="button" onClick={() => setConfirmDelete(false)} className="rounded-xl border border-line bg-surface px-3 py-2 text-sm font-medium text-ink-soft hover:bg-surface-2">Cancel</button>
-              <button type="button" disabled={busy} onClick={handleDelete} className="inline-flex items-center gap-1.5 rounded-xl bg-stage-rejected px-3 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:cursor-wait disabled:opacity-60">
+              <Button variant="secondary" onClick={() => setConfirmDelete(false)}>Cancel</Button>
+              <Button variant="danger" disabled={busy} onClick={handleDelete}>
                 {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />} Confirm delete
-              </button>
+              </Button>
             </div>
           ) : (
-            <button type="button" onClick={() => setConfirmDelete(true)} className="inline-flex items-center gap-1.5 self-start rounded-xl border border-line px-3 py-2 text-sm font-medium text-ink-faint transition hover:border-stage-rejected hover:text-stage-rejected">
+            <Button variant="secondary" className="self-start" onClick={() => setConfirmDelete(true)}>
               <Trash2 className="h-4 w-4" /> Delete
-            </button>
+            </Button>
           )}
         </div>
       </div>

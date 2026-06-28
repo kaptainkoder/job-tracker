@@ -9,8 +9,10 @@ import {
   applicationFormToPayload,
   applicationToForm,
   applyStageChange,
+  computeMetrics,
   countStale,
   formatRelativeActivity,
+  formatResponseRate,
   formatSalary,
   groupByStage,
   parsedLeadToForm,
@@ -109,6 +111,32 @@ test('countStale flags only active apps untouched for the stale window', () => {
     countStale([mk('applied', old), mk('lead', fresh), mk('rejected', old), mk('offer', old)], now),
     1,
   );
+});
+
+test('dashboard metrics count stages and derive an honest response rate', () => {
+  const mk = (stage: Application['stage']): Application => ({ stage } as Application);
+  // submitted = applied/interviewing/offer/rejected = 4; responded = interviewing/offer = 2.
+  const m = computeMetrics([
+    mk('lead'),
+    mk('applied'),
+    mk('interviewing'),
+    mk('offer'),
+    mk('rejected'),
+  ]);
+  assert.equal(m.total, 5);
+  assert.equal(m.interviewing, 1);
+  assert.equal(m.offers, 1);
+  assert.equal(m.responseRate, 2 / 4);
+  assert.equal(formatResponseRate(m.responseRate), '50%');
+});
+
+test('response rate is null/"—" until something is submitted (never a fabricated 0%)', () => {
+  const mk = (stage: Application['stage']): Application => ({ stage } as Application);
+  const m = computeMetrics([mk('lead'), mk('lead')]);
+  assert.equal(m.total, 2);
+  assert.equal(m.responseRate, null);
+  assert.equal(formatResponseRate(m.responseRate), '—');
+  assert.equal(formatResponseRate(0), '0%');
 });
 
 test('form payload trims required fields, nulls blanks, and parses salary numbers', () => {

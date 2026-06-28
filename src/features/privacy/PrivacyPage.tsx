@@ -45,8 +45,8 @@ export default function PrivacyPage() {
   return (
     <div className="animate-rise space-y-6">
       <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent">What leaves your machine</p>
-        <h1 className="mt-1 text-2xl font-semibold text-ink">Privacy</h1>
+        <p className="text-2xs font-semibold uppercase tracking-[0.16em] text-accent">What leaves your machine</p>
+        <h1 className="mt-1 text-h1 font-semibold text-ink">Privacy</h1>
         <p className="mt-1 max-w-2xl text-sm leading-6 text-ink-soft">
           Every call this app makes to a third party (OpenRouter, EnhanceCV) is logged here with a
           plain-English manifest of what was sent, what was withheld, the model, an integrity hash,

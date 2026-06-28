@@ -1,6 +1,7 @@
 import { ArrowRight, BriefcaseBusiness, CheckCircle2, FileText, LockKeyhole, Sparkles } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import Brand from '../../shared/ui/Brand';
+import { buttonClasses } from '../../shared/ui/Button';
 import ThemeToggle from '../../shared/ui/ThemeToggle';
 import { useAuth } from '../auth/AuthProvider';
 
@@ -30,7 +31,7 @@ export default function LandingPage() {
           <a href="#how-it-works" className="hidden text-sm text-ink-soft transition hover:text-ink sm:block">How it works</a>
           <a href="#privacy" className="hidden text-sm text-ink-soft transition hover:text-ink sm:block">Privacy</a>
           <ThemeToggle />
-          <Link to={status === 'authenticated' ? '/tracker' : '/sign-in'} className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-accent-strong">
+          <Link to={status === 'authenticated' ? '/tracker' : '/sign-in'} className={buttonClasses('primary', 'md')}>
             {status === 'authenticated' ? 'Open app' : 'Sign in'}
           </Link>
         </nav>
@@ -48,11 +49,11 @@ export default function LandingPage() {
             Stop juggling a spreadsheet, ChatGPT, and five tabs. Track every application, then build a tailored kit and night-before prep — without inventing anything.
           </p>
           <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
-            <Link to={trackerHref} className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-5 py-3 text-sm font-medium text-white shadow-card transition hover:bg-accent-strong">
+            <Link to={trackerHref} className={buttonClasses('primary', 'lg')}>
               Open the tracker <ArrowRight className="h-4 w-4" />
             </Link>
             {status !== 'authenticated' && (
-              <Link to="/sign-in" className="rounded-xl border border-line bg-surface px-5 py-3 text-sm font-medium text-ink transition hover:bg-surface-2">
+              <Link to="/sign-in" className={buttonClasses('secondary', 'lg')}>
                 Sign in with email
               </Link>
             )}
@@ -99,7 +100,7 @@ export default function LandingPage() {
               <p className="mt-2 text-sm leading-6 text-ink-soft">Every call to an outside service is logged: what categories left, what was withheld, and the cost. Two egress targets, ever. Your key, your data.</p>
               <div className="mt-4 flex flex-wrap gap-3 text-xs text-ink-soft"><span className="inline-flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5 text-stage-offer" /> RLS on every row</span><span className="inline-flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5 text-stage-offer" /> Passwordless login</span></div>
             </div>
-            <Link to={trackerHref} className="rounded-xl bg-accent px-5 py-3 text-sm font-medium text-white transition hover:bg-accent-strong">See it in the app</Link>
+            <Link to={trackerHref} className={buttonClasses('primary', 'lg')}>See it in the app</Link>
           </div>
           <p className="mt-11 text-center text-xs text-ink-faint">Job Tracker — a personal tool. Built for one job search, honestly.</p>
         </section>

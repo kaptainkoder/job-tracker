@@ -10,9 +10,11 @@ import {
   Upload,
   UserRound,
 } from 'lucide-react';
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type InputHTMLAttributes } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import type { Profile } from '../../shared/types';
 import { supabase } from '../../shared/lib/supabase';
+import Button from '../../shared/ui/Button';
+import Input from '../../shared/ui/Input';
 import { useAuth } from '../auth/AuthProvider';
 import {
   EMPTY_PROFILE_FORM,
@@ -24,28 +26,6 @@ import {
   type ProfileFieldErrors,
   type ProfileFormValues,
 } from './profile';
-
-interface FormFieldProps extends InputHTMLAttributes<HTMLInputElement> {
-  label: string;
-  error?: string;
-}
-
-function FormField({ label, error, id, ...props }: FormFieldProps) {
-  const errorId = `${id}-error`;
-  return (
-    <div>
-      <label htmlFor={id} className="text-xs font-medium text-ink-soft">{label}</label>
-      <input
-        {...props}
-        id={id}
-        className={`input mt-2 ${error ? 'border-stage-rejected focus:border-stage-rejected focus-visible:ring-stage-rejected' : ''}`}
-        aria-invalid={Boolean(error)}
-        aria-describedby={error ? errorId : undefined}
-      />
-      {error && <span id={errorId} className="mt-1.5 block text-xs text-stage-rejected">{error}</span>}
-    </div>
-  );
-}
 
 export default function ProfilePage() {
   const { user } = useAuth();
@@ -205,12 +185,12 @@ export default function ProfilePage() {
 
   if (loadError) {
     return (
-      <section className="card max-w-xl p-6" role="alert">
-        <h1 className="text-xl font-semibold text-ink">We couldn’t load your profile</h1>
+      <section className="card max-w-reading p-6" role="alert">
+        <h1 className="text-h2 font-semibold text-ink">We couldn’t load your profile</h1>
         <p className="mt-2 text-sm text-stage-rejected">{loadError}</p>
-        <button type="button" onClick={() => setReloadKey((key) => key + 1)} className="mt-5 rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-white hover:bg-accent-strong">
+        <Button size="lg" className="mt-5" onClick={() => setReloadKey((key) => key + 1)}>
           Try again
-        </button>
+        </Button>
       </section>
     );
   }
@@ -218,8 +198,8 @@ export default function ProfilePage() {
   return (
     <div className="animate-rise space-y-6">
       <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent">Your source of truth</p>
-        <h1 className="mt-1 text-2xl font-semibold text-ink">Profile</h1>
+        <p className="text-2xs font-semibold uppercase tracking-[0.16em] text-accent">Your source of truth</p>
+        <h1 className="mt-1 text-h1 font-semibold text-ink">Profile</h1>
         <p className="mt-1 max-w-2xl text-sm leading-6 text-ink-soft">
           Keep your core details and base resume here. Tailoring will use this profile without inventing missing experience.
         </p>
@@ -234,9 +214,9 @@ export default function ProfilePage() {
           </div>
         </div>
         <div className="grid gap-5 p-5 sm:grid-cols-2 sm:p-6">
-          <FormField id="full-name" label="Full name" autoComplete="name" value={values.full_name} onChange={(event) => updateField('full_name', event.target.value)} placeholder="Karan Sharma" />
-          <FormField id="email" label="Email" type="email" autoComplete="email" value={values.email} onChange={(event) => updateField('email', event.target.value)} error={fieldErrors.email} placeholder="you@example.com" />
-          <FormField id="phone" label="Phone" type="tel" autoComplete="tel" value={values.phone} onChange={(event) => updateField('phone', event.target.value)} placeholder="+91 …" />
+          <Input id="full-name" label="Full name" autoComplete="name" value={values.full_name} onChange={(event) => updateField('full_name', event.target.value)} placeholder="Karan Sharma" />
+          <Input id="email" label="Email" type="email" autoComplete="email" value={values.email} onChange={(event) => updateField('email', event.target.value)} error={fieldErrors.email} placeholder="you@example.com" />
+          <Input id="phone" label="Phone" type="tel" autoComplete="tel" value={values.phone} onChange={(event) => updateField('phone', event.target.value)} placeholder="+91 …" />
         </div>
 
         <div className="flex items-start gap-3 border-y border-line-soft px-5 py-4 sm:px-6">
@@ -247,8 +227,8 @@ export default function ProfilePage() {
           </div>
         </div>
         <div className="grid gap-5 p-5 sm:grid-cols-2 sm:p-6">
-          <FormField id="current-title" label="Current title" autoComplete="organization-title" value={values.current_title} onChange={(event) => updateField('current_title', event.target.value)} placeholder="Product Manager" />
-          <FormField id="current-company" label="Current company" autoComplete="organization" value={values.current_company} onChange={(event) => updateField('current_company', event.target.value)} placeholder="Company name" />
+          <Input id="current-title" label="Current title" autoComplete="organization-title" value={values.current_title} onChange={(event) => updateField('current_title', event.target.value)} placeholder="Product Manager" />
+          <Input id="current-company" label="Current company" autoComplete="organization" value={values.current_company} onChange={(event) => updateField('current_company', event.target.value)} placeholder="Company name" />
         </div>
 
         <div className="flex items-start gap-3 border-y border-line-soft px-5 py-4 sm:px-6">
@@ -259,8 +239,8 @@ export default function ProfilePage() {
           </div>
         </div>
         <div className="grid gap-5 p-5 sm:grid-cols-2 sm:p-6">
-          <FormField id="linkedin-url" label="LinkedIn URL" type="url" inputMode="url" value={values.linkedin_url} onChange={(event) => updateField('linkedin_url', event.target.value)} error={fieldErrors.linkedin_url} placeholder="https://linkedin.com/in/…" />
-          <FormField id="github-url" label="GitHub URL" type="url" inputMode="url" value={values.github_url} onChange={(event) => updateField('github_url', event.target.value)} error={fieldErrors.github_url} placeholder="https://github.com/…" />
+          <Input id="linkedin-url" label="LinkedIn URL" type="url" inputMode="url" value={values.linkedin_url} onChange={(event) => updateField('linkedin_url', event.target.value)} error={fieldErrors.linkedin_url} placeholder="https://linkedin.com/in/…" />
+          <Input id="github-url" label="GitHub URL" type="url" inputMode="url" value={values.github_url} onChange={(event) => updateField('github_url', event.target.value)} error={fieldErrors.github_url} placeholder="https://github.com/…" />
         </div>
 
         <div className="flex flex-col gap-3 border-t border-line-soft bg-surface-2/50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
@@ -268,10 +248,10 @@ export default function ProfilePage() {
             {formError && <p className="text-sm text-stage-rejected" role="alert">{formError}</p>}
             {formSuccess && <p className="flex items-center gap-1.5 text-sm text-stage-offer"><CheckCircle2 className="h-4 w-4" />{formSuccess}</p>}
           </div>
-          <button type="submit" disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-white shadow-card transition hover:bg-accent-strong disabled:cursor-wait disabled:opacity-60">
+          <Button type="submit" size="lg" disabled={saving}>
             {saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             {saving ? 'Saving…' : 'Save profile'}
-          </button>
+          </Button>
         </div>
       </form>
 
@@ -287,15 +267,15 @@ export default function ProfilePage() {
           </div>
           <div className="flex shrink-0 flex-wrap gap-2">
             {resumePath && (
-              <button type="button" disabled={downloading || uploading} onClick={handleDownload} className="inline-flex items-center gap-2 rounded-xl border border-line bg-surface px-3.5 py-2.5 text-sm font-medium text-ink-soft transition hover:bg-surface-2 hover:text-ink disabled:cursor-wait disabled:opacity-60">
+              <Button variant="secondary" size="lg" disabled={downloading || uploading} onClick={handleDownload}>
                 {downloading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                 Download
-              </button>
+              </Button>
             )}
-            <button type="button" disabled={uploading} onClick={() => fileInputRef.current?.click()} className="inline-flex items-center gap-2 rounded-xl bg-accent px-3.5 py-2.5 text-sm font-medium text-white transition hover:bg-accent-strong disabled:cursor-wait disabled:opacity-60">
+            <Button size="lg" disabled={uploading} onClick={() => fileInputRef.current?.click()}>
               {uploading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
               {uploading ? 'Uploading…' : resumePath ? 'Replace PDF' : 'Upload PDF'}
-            </button>
+            </Button>
             <input ref={fileInputRef} type="file" accept=".pdf,application/pdf" onChange={handleResumeSelection} className="sr-only" aria-label="Choose base resume PDF" />
           </div>
         </div>

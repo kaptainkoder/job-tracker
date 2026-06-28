@@ -3,74 +3,82 @@
 @tailwind utilities;
 
 @layer base {
-  /* Semantic-token color channels as space-separated RGB, consumed by the Tailwind
-     config via rgb(var(--token) / <alpha-value>). :root = LIGHT, .dark overrides.
-     Flipping these flips every token usage (and its /40 /20 opacity modifiers) at once.
-     `stage-*` tokens are this app's job-application pipeline stages. */
+  /* Canonical Claude Design token system (--ds-* namespace). Colors are space-separated
+     RGB channels consumed by tailwind.config via rgb(var(--ds-token) / <alpha-value>) so
+     every /40 /20 opacity modifier keeps working. :root = LIGHT, .dark overrides.
+     Non-color scales (typography, spacing, radii, shadows, motion) live in tailwind.config.
+     `stage-*` are this app's job-application pipeline stages — used ONLY as 8px dots or
+     ~15% tint pills per the design's near-monochrome rule, never as large fills. */
   :root {
-    --canvas: 251 251 252;
-    --surface: 255 255 255;
-    --surface-2: 246 247 249;
-    --surface-3: 241 243 245;
-    --border: 233 235 238;
-    --border-soft: 240 241 243;
-    --accent: 59 125 216;
-    --accent-strong: 46 107 192;
-    --accent-soft: 234 241 251;
-    --accent-muted: 156 192 224;
-    --ink: 26 29 33;
-    --ink-soft: 91 100 112;
-    --ink-faint: 152 161 173;
-    --stage-lead: 138 166 191;        /* blue-grey — just landed / unqualified */
-    --stage-applied: 74 143 203;      /* accent blue — in flight */
-    --stage-interviewing: 194 138 42; /* amber — active / hot */
-    --stage-offer: 63 157 109;        /* green — success */
-    --stage-rejected: 184 107 107;    /* muted red — closed, not deleted */
+    --ds-canvas: 251 251 252;          /* #FBFBFC */
+    --ds-surface: 255 255 255;         /* #FFFFFF */
+    --ds-surface-2: 246 247 249;       /* #F6F7F9 */
+    --ds-surface-3: 241 243 245;       /* #F1F3F5 */
+    --ds-border: 233 235 238;          /* #E9EBEE */
+    --ds-border-soft: 240 241 243;     /* #F0F1F3 */
+    --ds-accent: 59 125 216;           /* #3B7DD8 — the single blue; all actionable/active */
+    --ds-accent-strong: 46 107 192;    /* #2E6BC0 */
+    --ds-accent-soft: 234 241 251;     /* #EAF1FB */
+    --ds-accent-muted: 156 192 224;
+    --ds-ink: 26 29 33;                /* #1A1D21 */
+    --ds-ink-soft: 91 100 112;         /* #5B6470 */
+    --ds-ink-faint: 152 161 173;       /* #98A1AD */
+    --ds-stage-lead: 138 166 191;      /* blue-grey — just landed / unqualified */
+    --ds-stage-applied: 74 143 203;    /* accent blue — in flight */
+    --ds-stage-interviewing: 194 138 42; /* #C28A2A amber — active / hot */
+    --ds-stage-offer: 63 157 109;      /* green — success */
+    --ds-stage-rejected: 184 107 107;  /* #B86B6B muted red — closed, not deleted */
   }
   .dark {
-    --canvas: 11 17 23;
-    --surface: 19 28 38;
-    --surface-2: 15 24 34;
-    --surface-3: 24 36 49;
-    --border: 35 48 61;
-    --border-soft: 26 37 48;
-    --accent: 91 159 214;
-    --accent-strong: 125 180 226;
-    --accent-soft: 27 50 71;
-    --accent-muted: 47 77 104;
-    --ink: 231 238 246;
-    --ink-soft: 159 180 200;
-    --ink-faint: 111 132 151;
-    --stage-lead: 126 152 176;
-    --stage-applied: 91 159 214;
-    --stage-interviewing: 224 162 58;
-    --stage-offer: 76 174 125;
-    --stage-rejected: 200 128 128;
+    --ds-canvas: 11 17 23;
+    --ds-surface: 19 28 38;
+    --ds-surface-2: 15 24 34;
+    --ds-surface-3: 24 36 49;
+    --ds-border: 35 48 61;
+    --ds-border-soft: 26 37 48;
+    --ds-accent: 91 159 214;           /* #5B9FD6 */
+    --ds-accent-strong: 125 180 226;
+    --ds-accent-soft: 27 50 71;
+    --ds-accent-muted: 47 77 104;
+    --ds-ink: 231 238 246;
+    --ds-ink-soft: 159 180 200;
+    --ds-ink-faint: 111 132 151;
+    --ds-stage-lead: 126 152 176;
+    --ds-stage-applied: 91 159 214;
+    --ds-stage-interviewing: 224 162 58;
+    --ds-stage-offer: 76 174 125;
+    --ds-stage-rejected: 200 128 128;
   }
   html {
     -webkit-font-smoothing: antialiased;
   }
   body {
-    @apply bg-canvas text-ink font-sans;
+    @apply bg-canvas text-ink font-sans text-base;
+    line-height: 1.55;
   }
+  /* Always-visible 2px accent focus ring (SKILL.md non-negotiable). */
   *:focus-visible {
     @apply outline-none ring-2 ring-accent ring-offset-2 ring-offset-canvas;
-    border-radius: 0.5rem;
+    border-radius: 0.5625rem;
   }
 }
 
 @layer components {
+  /* Floating-card surface, two-tier shadow tier 1. */
   .card {
     @apply rounded-2xl border border-line bg-surface shadow-card;
   }
+  /* Stage/outcome tint pill: ~15% tint + matching ink. Never a large fill. */
   .pill {
     @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium;
   }
+  /* Form input baseline (the Input primitive composes from this token set). */
   .input {
-    @apply block w-full rounded-xl border border-line bg-surface-2 px-3 py-2.5 text-sm text-ink outline-none transition placeholder:text-ink-faint focus:border-accent focus-visible:ring-2 focus-visible:ring-accent;
+    @apply block w-full rounded-md border border-line bg-surface-2 px-3 py-2.5 text-sm text-ink outline-none transition placeholder:text-ink-faint focus:border-accent focus-visible:ring-2 focus-visible:ring-accent;
   }
 }
 
+/* Motion = fade-only, 120–200ms ease-out, and must degrade to fully-visible. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

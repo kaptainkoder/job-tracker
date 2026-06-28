@@ -105,6 +105,43 @@ export function countStale(apps: Application[], now: Date = new Date()): number 
   return apps.filter((app) => isStale(app.stage, app.last_activity_at, now)).length;
 }
 
+// --- Dashboard metrics (the 4 StatCards above the board) ---------------------
+
+// A card counts as "submitted" once it has been applied or moved past it (incl. rejected).
+const SUBMITTED_STAGES: Stage[] = ['applied', 'interviewing', 'offer', 'rejected'];
+// A submitted card counts as "responded" if it advanced to an interview or an offer.
+const RESPONDED_STAGES: Stage[] = ['interviewing', 'offer'];
+
+export interface BoardMetrics {
+  total: number;
+  interviewing: number;
+  offers: number;
+  /**
+   * Response rate = responded ÷ submitted, where submitted = applied-or-later and
+   * responded = interviewing/offer. Null (renders "—") until at least one app is
+   * submitted, so an empty board never shows a fabricated 0%.
+   */
+  responseRate: number | null;
+}
+
+export function computeMetrics(apps: Application[]): BoardMetrics {
+  const interviewing = apps.filter((a) => a.stage === 'interviewing').length;
+  const offers = apps.filter((a) => a.stage === 'offer').length;
+  const submitted = apps.filter((a) => SUBMITTED_STAGES.includes(a.stage)).length;
+  const responded = apps.filter((a) => RESPONDED_STAGES.includes(a.stage)).length;
+  return {
+    total: apps.length,
+    interviewing,
+    offers,
+    responseRate: submitted === 0 ? null : responded / submitted,
+  };
+}
+
+/** Whole-percent string for the response-rate StatCard; "—" when undefined. */
+export function formatResponseRate(rate: number | null): string {
+  return rate == null ? '—' : `${Math.round(rate * 100)}%`;
+}
+
 // --- Add/edit form -----------------------------------------------------------
 
 export interface ApplicationFormValues {

@@ -4,13 +4,11 @@ import {
   Save,
   Sparkles,
   X,
-  type LucideIcon,
 } from 'lucide-react';
 import {
   useEffect,
   useState,
   type FormEvent,
-  type InputHTMLAttributes,
   type ReactNode,
   type SelectHTMLAttributes,
 } from 'react';
@@ -18,6 +16,8 @@ import type { Application } from '../../shared/types';
 import { STAGES, STAGE_LABEL } from '../../shared/domain/stages';
 import { parseLeadInput } from '../../shared/domain/parser';
 import { supabase } from '../../shared/lib/supabase';
+import Button from '../../shared/ui/Button';
+import Input from '../../shared/ui/Input';
 import { useAuth } from '../auth/AuthProvider';
 import {
   EMPTY_APPLICATION_FORM,
@@ -34,28 +34,6 @@ const PRIORITIES: Array<{ value: ApplicationFormValues['priority']; label: strin
   { value: 'medium', label: 'Medium' },
   { value: 'high', label: 'High' },
 ];
-
-interface FieldProps extends InputHTMLAttributes<HTMLInputElement> {
-  label: string;
-  error?: string;
-}
-
-function Field({ label, error, id, ...props }: FieldProps) {
-  const errorId = `${id}-error`;
-  return (
-    <div>
-      <label htmlFor={id} className="text-xs font-medium text-ink-soft">{label}</label>
-      <input
-        {...props}
-        id={id}
-        className={`input mt-2 ${error ? 'border-stage-rejected focus:border-stage-rejected focus-visible:ring-stage-rejected' : ''}`}
-        aria-invalid={Boolean(error)}
-        aria-describedby={error ? errorId : undefined}
-      />
-      {error && <span id={errorId} className="mt-1.5 block text-xs text-stage-rejected">{error}</span>}
-    </div>
-  );
-}
 
 interface SelectFieldProps extends SelectHTMLAttributes<HTMLSelectElement> {
   label: string;
@@ -168,34 +146,29 @@ export default function ApplicationForm({ mode, application, onClose, onSaved }:
               className="input mt-2 resize-y"
             />
             <div className="mt-2 flex items-center gap-3">
-              <button
-                type="button"
-                onClick={handleParse}
-                disabled={!paste.trim()}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-line bg-surface px-3 py-2 text-sm font-medium text-ink-soft transition hover:bg-surface-2 hover:text-ink disabled:opacity-50"
-              >
+              <Button variant="secondary" onClick={handleParse} disabled={!paste.trim()}>
                 <ClipboardPaste className="h-4 w-4" />
                 Parse
-              </button>
+              </Button>
               {pasteNote && <p className="text-xs text-ink-faint">{pasteNote}</p>}
             </div>
           </div>
         )}
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field autoFocus id="company" label="Company *" value={values.company} onChange={(e) => update('company', e.target.value)} error={errors.company} placeholder="Acme Corp" />
-          <Field id="role" label="Role *" value={values.role} onChange={(e) => update('role', e.target.value)} error={errors.role} placeholder="Senior Engineer" />
+          <Input autoFocus id="company" label="Company *" value={values.company} onChange={(e) => update('company', e.target.value)} error={errors.company} placeholder="Acme Corp" />
+          <Input id="role" label="Role *" value={values.role} onChange={(e) => update('role', e.target.value)} error={errors.role} placeholder="Senior Engineer" />
           <SelectField id="stage" label="Stage" value={values.stage} onChange={(e) => update('stage', e.target.value)}>
             {STAGES.map((s) => <option key={s} value={s}>{STAGE_LABEL[s]}</option>)}
           </SelectField>
           <SelectField id="priority" label="Priority" value={values.priority} onChange={(e) => update('priority', e.target.value)}>
             {PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
           </SelectField>
-          <Field id="job-url" label="Job link" type="url" inputMode="url" value={values.job_url} onChange={(e) => update('job_url', e.target.value)} error={errors.job_url} placeholder="https://…" />
-          <Field id="job-location" label="Location" value={values.job_location} onChange={(e) => update('job_location', e.target.value)} placeholder="Remote · Berlin · …" />
-          <Field id="salary-min" label="Salary min" inputMode="numeric" value={values.salary_min} onChange={(e) => update('salary_min', e.target.value)} error={errors.salary_min} placeholder="Leave blank if unspecified" />
-          <Field id="salary-max" label="Salary max" inputMode="numeric" value={values.salary_max} onChange={(e) => update('salary_max', e.target.value)} error={errors.salary_max} placeholder="Leave blank if unspecified" />
-          <Field id="salary-currency" label="Currency" value={values.salary_currency} onChange={(e) => update('salary_currency', e.target.value)} placeholder="USD · INR · EUR" />
+          <Input id="job-url" label="Job link" type="url" inputMode="url" value={values.job_url} onChange={(e) => update('job_url', e.target.value)} error={errors.job_url} placeholder="https://…" />
+          <Input id="job-location" label="Location" value={values.job_location} onChange={(e) => update('job_location', e.target.value)} placeholder="Remote · Berlin · …" />
+          <Input id="salary-min" label="Salary min" inputMode="numeric" value={values.salary_min} onChange={(e) => update('salary_min', e.target.value)} error={errors.salary_min} helper="Leave blank if unspecified" />
+          <Input id="salary-max" label="Salary max" inputMode="numeric" value={values.salary_max} onChange={(e) => update('salary_max', e.target.value)} error={errors.salary_max} helper="Leave blank if unspecified" />
+          <Input id="salary-currency" label="Currency" value={values.salary_currency} onChange={(e) => update('salary_currency', e.target.value)} placeholder="USD · INR · EUR" />
         </div>
 
         <div>
@@ -208,21 +181,15 @@ export default function ApplicationForm({ mode, application, onClose, onSaved }:
             {formError && <p className="text-sm text-stage-rejected" role="alert">{formError}</p>}
           </div>
           <div className="flex gap-2">
-            <button type="button" onClick={onClose} className="rounded-xl border border-line bg-surface px-4 py-2.5 text-sm font-medium text-ink-soft transition hover:bg-surface-2 hover:text-ink">Cancel</button>
-            <SubmitButton saving={saving} icon={saving ? LoaderCircle : Save} label={saving ? 'Saving…' : 'Save'} />
+            <Button variant="secondary" size="lg" onClick={onClose}>Cancel</Button>
+            <Button type="submit" size="lg" disabled={saving}>
+              {saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              {saving ? 'Saving…' : 'Save'}
+            </Button>
           </div>
         </div>
       </form>
     </ModalShell>
-  );
-}
-
-function SubmitButton({ saving, icon: Icon, label }: { saving: boolean; icon: LucideIcon; label: string }) {
-  return (
-    <button type="submit" disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-white shadow-card transition hover:bg-accent-strong disabled:cursor-wait disabled:opacity-60">
-      <Icon className={`h-4 w-4 ${saving ? 'animate-spin' : ''}`} />
-      {label}
-    </button>
   );
 }
 
