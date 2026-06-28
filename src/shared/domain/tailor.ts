@@ -9,9 +9,11 @@
 // The posture (locked decision "No fabrication = gap-interview" + the privacy posture): nothing is
 // invented, and the manifest of what leaves the device is always derivable from the context.
 
-import type { ChatMessage } from './llm';
-import type { PrivacyCategory } from './privacy';
-import { skillLabel, type SkillId } from './gap';
+// Explicit .js specifiers are required when this module is emitted into Vercel's Node ESM
+// function bundle. TypeScript maps them back to the .ts sources during local builds.
+import type { ChatMessage } from './llm.js';
+import type { PrivacyCategory } from './privacy.js';
+import { skillLabel, type SkillId } from './gap.js';
 
 export type TailorAction = 'tailor' | 'cover' | 'prep';
 export const TAILOR_ACTIONS: readonly TailorAction[] = ['tailor', 'cover', 'prep'];
