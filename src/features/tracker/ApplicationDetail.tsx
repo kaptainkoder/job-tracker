@@ -74,8 +74,9 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
   const [tailoring, setTailoring] = useState(false);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [artifactsLoading, setArtifactsLoading] = useState(true);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
   const [pdfDocument, setPdfDocument] = useState<ResumeDocument | null>(null);
-  const [pdfLoadingId, setPdfLoadingId] = useState<string | null>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -94,6 +95,29 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
       active = false;
     };
   }, [application.id]);
+
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+    setProfileLoading(true);
+    setPdfError(null);
+    void supabase
+      .from('profile')
+      .select('*')
+      .eq('id', user.id)
+      .maybeSingle()
+      .then(({ data, error: profileError }) => {
+        if (!active) return;
+        setProfile((data as Profile | null) ?? null);
+        if (profileError || !data) {
+          setPdfError(`Could not prepare saved résumé PDFs. ${profileError?.message ?? 'Profile not found.'}`);
+        }
+        setProfileLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [user]);
 
   useEffect(() => {
     let active = true;
@@ -139,23 +163,12 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
     onChanged();
   }
 
-  async function openSavedResumePdf(artifact: Artifact) {
-    if (!user || artifact.kind !== 'tailored-resume') return;
-    setPdfLoadingId(artifact.id);
+  function openSavedResumePdf(artifact: Artifact) {
+    if (artifact.kind !== 'tailored-resume' || !profile) return;
     setPdfError(null);
-    const { data, error: profileError } = await supabase
-      .from('profile')
-      .select('*')
-      .eq('id', user.id)
-      .maybeSingle();
-    setPdfLoadingId(null);
-    if (profileError || !data) {
-      setPdfError(`Could not prepare the saved résumé PDF. ${profileError?.message ?? 'Profile not found.'}`);
-      return;
-    }
     setPdfDocument(buildResumeDocument({
       content: artifact.content,
-      profile: data as Profile,
+      profile,
       application,
     }));
   }
@@ -307,11 +320,11 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
                         <Button
                           variant="secondary"
                           size="sm"
-                          disabled={pdfLoadingId !== null}
-                          onClick={() => void openSavedResumePdf(artifact)}
+                          disabled={!profile}
+                          onClick={() => openSavedResumePdf(artifact)}
                         >
-                          {pdfLoadingId === artifact.id ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-                          {pdfLoadingId === artifact.id ? 'Preparing PDF…' : 'Preview PDF'}
+                          {profileLoading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                          {profileLoading ? 'Loading profile…' : 'Preview PDF'}
                         </Button>
                       </div>
                     )}
