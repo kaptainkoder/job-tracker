@@ -12,9 +12,23 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { UserSettings } from '../../shared/types';
 import { supabase } from '../../shared/lib/supabase';
 import { streamLlm } from '../../shared/lib/llmClient';
+import { writePrivacyLog } from '../../shared/lib/privacyLog';
+import {
+  buildManifest,
+  payloadHash,
+  preflightKey,
+  requiresPreflight,
+} from '../../shared/domain/privacy';
 import Badge from '../../shared/ui/Badge';
 import Button from '../../shared/ui/Button';
+import PreflightModal from '../../shared/ui/PreflightModal';
 import { useAuth } from '../auth/AuthProvider';
+
+// A ping carries no personal data — only a short test message — so its manifest sends nothing
+// from the profile and withholds everything. The gate still fires (first-of-type egress to a
+// third party), proving no external call ships un-gated or un-logged.
+const PING_MANIFEST = buildManifest([]);
+const PING_KEY = preflightKey('openrouter', 'ping');
 import {
   DEFAULT_SETTINGS_FORM,
   MODEL_OPTIONS,
@@ -37,7 +51,12 @@ export default function SettingsPage() {
   const [streaming, setStreaming] = useState(false);
   const [streamOutput, setStreamOutput] = useState('');
   const [streamError, setStreamError] = useState<string | null>(null);
+  const [auditNote, setAuditNote] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Pre-flight gate: (target, action) pairs approved this session, plus the open dialog flag.
+  const [approvedKeys, setApprovedKeys] = useState<string[]>([]);
+  const [preflightOpen, setPreflightOpen] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -95,6 +114,24 @@ export default function SettingsPage() {
     setFormSuccess('Settings saved.');
   }
 
+  // Echo has zero egress, so it runs ungated. Ping egresses to OpenRouter, so it must clear the
+  // pre-flight gate first; the click handler decides whether the dialog is required.
+  function onPingClick() {
+    setStreamError(null);
+    setAuditNote(null);
+    if (requiresPreflight({ target: 'openrouter', action: 'ping', manifest: PING_MANIFEST, approvedKeys })) {
+      setPreflightOpen(true);
+    } else {
+      void runStream('ping');
+    }
+  }
+
+  function approvePreflight() {
+    setApprovedKeys((keys) => (keys.includes(PING_KEY) ? keys : [...keys, PING_KEY]));
+    setPreflightOpen(false);
+    void runStream('ping');
+  }
+
   async function runStream(action: 'echo' | 'ping') {
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -103,6 +140,7 @@ export default function SettingsPage() {
     setStreamError(null);
     setStreamOutput('');
 
+    let streamed = false;
     try {
       await streamLlm({
         action,
@@ -112,6 +150,7 @@ export default function SettingsPage() {
         signal: controller.signal,
         onToken: (token) => setStreamOutput((current) => current + token),
       });
+      streamed = true;
     } catch (error) {
       if (controller.signal.aborted) return;
       setStreamError(error instanceof Error ? error.message : 'Streaming failed.');
@@ -120,6 +159,22 @@ export default function SettingsPage() {
         abortRef.current = null;
         setStreaming(false);
       }
+    }
+
+    // Audit write: every external call logs exactly one privacy_log row once it completes. Echo
+    // never leaves the device, so it is not logged. Cost is null until B3 wires it from usage.
+    if (streamed && action === 'ping' && user) {
+      const sentPayload = { action: 'ping', model: values.model, no_log: values.no_log };
+      const { ok, error } = await writePrivacyLog({
+        userId: user.id,
+        target: 'openrouter',
+        action: 'ping',
+        model: values.model,
+        manifest: PING_MANIFEST,
+        payloadSha256: await payloadHash(sentPayload),
+        costUsd: null,
+      });
+      setAuditNote(ok ? 'Logged to your privacy log.' : `Privacy log write failed. ${error ?? ''}`);
     }
   }
 
@@ -247,7 +302,7 @@ export default function SettingsPage() {
           <Button variant="secondary" disabled={streaming} onClick={() => runStream('echo')}>
             <Square className="h-4 w-4" /> Test streaming (free)
           </Button>
-          <Button variant="secondary" disabled={streaming} onClick={() => runStream('ping')}>
+          <Button variant="secondary" disabled={streaming} onClick={onPingClick}>
             <Radio className="h-4 w-4" /> Ping the model (uses a few tokens)
           </Button>
           {streaming && (
@@ -266,8 +321,18 @@ export default function SettingsPage() {
         </div>
         <div className="mt-2 min-h-5" aria-live="polite">
           {streamError && <p className="text-sm text-stage-rejected" role="alert">{streamError}</p>}
+          {auditNote && <p className="text-sm text-ink-soft">{auditNote}</p>}
         </div>
       </section>
+
+      <PreflightModal
+        open={preflightOpen}
+        targetLabel="OpenRouter"
+        actionLabel="Ping the model"
+        manifest={PING_MANIFEST}
+        onApprove={approvePreflight}
+        onCancel={() => setPreflightOpen(false)}
+      />
     </div>
   );
 }
