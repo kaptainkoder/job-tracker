@@ -174,7 +174,7 @@ await test('saved tailored résumé opens and closes its PDF preview without ano
 
   await act(async () => clickByText('Preview PDF'));
   await waitForText(/client-side render/i);
-  assert.ok(document.querySelector('iframe[title="A4 résumé preview"]'));
+  assert.ok(document.querySelector('[data-testid="resume-a4-preview"]'));
   assert.equal(inserts().length, 0, 'previewing a saved artifact must not insert or regenerate anything');
 
   await act(async () => {

@@ -116,7 +116,7 @@ async function main() {
     assert.match(document.body.textContent ?? '', /Download PDF/);
     await act(async () => click('Download PDF'));
     await waitForText(/client-side render/i);
-    assert.ok(document.querySelector('iframe[title="A4 résumé preview"]'));
+    assert.ok(document.querySelector('[data-testid="resume-a4-preview"]'));
     await cleanup();
   });
 
@@ -145,7 +145,7 @@ async function main() {
     assert.equal(document.querySelector('[aria-labelledby="pdf-preview-heading"]'), null);
     await act(async () => click('Download PDF'));
     await waitForText(/client-side render/i);
-    assert.ok(document.querySelector('iframe[title="A4 résumé preview"]'), 'PDF preview should reopen');
+    assert.ok(document.querySelector('[data-testid="resume-a4-preview"]'), 'PDF preview should reopen');
     await cleanup();
   });
 
