@@ -18,6 +18,18 @@ Production code must not be changed.
   (proves the server key + no-log routing). Tokens stream back as SSE `data: {"token":"…"}`.
 - `OPENROUTER_API_KEY` is set in Vercel (Production + Development), read **server-side only**.
 
+## Already self-verified by Claude in prod (2026-06-28, commit `5ecfdf7`) — skip or just confirm
+- **#5 echo streaming** — `curl -N` to `/api/llm` returned progressive SSE frames
+  `data: {"token":"hello "}` … `data: [DONE]` (correct wire format).
+- **#8 unauthorized guard** — POST without a bearer → **401** `{"error":"Missing bearer token"}`;
+  GET → **405**; POST with bearer + bad action → **400**.
+- **#10 RLS (anon half)** — anon REST `GET user_settings` → **200 `[]`**; anon INSERT →
+  **401 code `42501`** (RLS violation). *Still worth the authenticated cross-UID probe.*
+- **Deploy** — prod `Ready`, `/api/health` → `{ok:true}`.
+
+**Focus your run on what Claude could NOT drive:** the authenticated browser checks
+(#1–#4, #7, #11) and **#6 the real model ping** (needs a live owner session + spends a few tokens).
+
 ## Checks
 
 | # | Check | Expected |
