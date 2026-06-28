@@ -1,4 +1,17 @@
-# B0 auth re-check — forged Bearer must now 401 (ready to run)
+# B0 auth re-check — forged Bearer must now 401 (RAN 2026-06-28: PASS)
+
+> **Run status (Codex, 2026-06-28): PASS.** No header → 401 `{"error":"Missing bearer token"}`,
+> no SSE (req `7cwhw-…`). Forged Bearer + echo → 401 `{"error":"Invalid or expired session"}`,
+> no SSE (`nrd5n-…`). Forged + ping → same 401, **no pong/SSE, dispatch stopped before the paid
+> path** (`rgwbd-…`). Malformed `eyJhbGc.invalid.sig` + ping → 401 (`cvz8f-…`). Valid owner: echo
+> 200 `text/event-stream` (18 chunks, `82bg6-…`); one ping 200 SSE `p`+`ong`+DONE (`dlkfm-…`).
+> **Verdict: forged Bearer rejected = YES; valid echo/ping still stream.**
+> Mobile 390×844 Settings = PASS (bottom order Tracker/Profile/Settings/Privacy, desktop nav
+> hidden, `/settings` in shell, only Settings `aria-current=page`/blue).
+> **Egress trace = WARN (residual):** Vercel logs show only the `/api/llm` request, no outbound
+> span/body. Live `pong` passed and the source routes `openrouter.ai` + default no-log body adds
+> `provider.data_collection=deny`, but this is **not independently proven by a server trace** —
+> revisit when B3 makes real tailor calls.
 
 Re-verify the fix for the B0 bug #8 authorization bypass (see
 [`B0-live-verification-2026-06-28.md`](B0-live-verification-2026-06-28.md)). Before the fix,

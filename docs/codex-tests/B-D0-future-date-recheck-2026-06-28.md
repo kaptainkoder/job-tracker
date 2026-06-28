@@ -1,4 +1,20 @@
-# B-D0 #9 future-date re-check + remaining design checks (ready to run)
+# B-D0 #9 future-date re-check + remaining design checks (RAN 2026-06-28: PASS)
+
+> **Run status (Codex, 2026-06-28): PASS — original report was an automation artifact, confirmed.**
+> Date input `max=2026-06-28`. A **real keyboard** attempt to change 28→29 was **rejected by the
+> native max**; the controlled value stayed today, so a future date can't be entered by a real
+> user. A scripted Playwright `fill` + DOM-property set to `2026-06-29` (`rangeOverflow=true`)
+> did **not** fire React `onChange`; clicking Log used stale *today* state, closed the form, showed
+> no inline error, and saved a **TODAY** row (DB: `callback`, `occurred_at=2026-06-28T06:30:00Z`,
+> `created_at=…T12:41:30Z`) — i.e. the saved row was dated TODAY, not tomorrow, proving onChange
+> never fired. **Verdict: future date blocked via real interaction = YES (at the native max).**
+> Residual: the inline "can't be in the future" copy is moot via real interaction (the native max
+> prevents ever reaching that state) so it stays unverified-in-prod, which is acceptable.
+> Other checks PASS: 390×844 shell top+bottom bars (desktop nav 0×0, bottom nav y=785.6 h=58.4);
+> board `overflow-x:auto` clientWidth=350/scrollWidth=1569; routes stayed in shell; stale 10-day
+> card showed amber dot/clock + "1 needs follow-up" / "Needs follow-up" / "1w ago"; Edit form has
+> labels/helper text, 9px radii, dark secondary Cancel + blue primary Save. Temp data cleaned up
+> (outcomes=0, applications=0).
 
 Re-verify the future-date outcome guard (B-D0 bug #9, see
 [`B-D0-live-verification-2026-06-28.md`](B-D0-live-verification-2026-06-28.md)) and clear the
