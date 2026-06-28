@@ -7,7 +7,7 @@ import {
   sseTokenFrame,
   sseErrorFrame,
   SSE_DONE,
-} from '../src/shared/domain/llm';
+} from '../src/shared/domain/llm.js'; // .js ext required: Vercel runs api/ as Node ESM, no bundler rewrite
 
 // The single Wave-B server surface: an action-routed, streaming LLM endpoint. It holds the
 // OpenRouter secret and streams tokens back as SSE (`data: {"token":"..."}`), so generation
