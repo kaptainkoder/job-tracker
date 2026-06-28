@@ -10,6 +10,12 @@ import {
   sseErrorFrame,
   SSE_DONE,
 } from '../src/shared/domain/llm.js'; // .js ext required: Vercel runs api/ as Node ESM, no bundler rewrite
+import {
+  buildManifest,
+  buildPrivacyLogRow,
+  payloadHash,
+  type AuditInput,
+} from '../src/shared/domain/privacy.js';
 
 // The single Wave-B server surface: an action-routed, streaming LLM endpoint. It holds the
 // OpenRouter secret and streams tokens back as SSE (`data: {"token":"..."}`), so generation
@@ -32,6 +38,8 @@ export interface LlmDeps {
   verifyToken: (token: string) => Promise<string | null>;
   /** The fetch used to reach OpenRouter. Tests assert it is never called on a rejected token. */
   fetchImpl: typeof fetch;
+  /** Persist one owner-scoped row before paid egress; failure must prevent the provider call. */
+  writeAudit: (token: string, input: AuditInput) => Promise<{ ok: boolean; error: string | null }>;
 }
 
 // Verify a Supabase access token by asking the project's auth server who it belongs to. This
@@ -63,6 +71,31 @@ async function verifySupabaseToken(token: string): Promise<string | null> {
   }
 }
 
+// Co-locate audit persistence with egress. The verified caller JWT is attached to this client so
+// the existing profile-owner RLS boundary also protects privacy_log inserts.
+async function writeSupabaseAudit(
+  token: string,
+  input: AuditInput,
+): Promise<{ ok: boolean; error: string | null }> {
+  const url = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL;
+  const key =
+    process.env.SUPABASE_ANON_KEY ??
+    process.env.VITE_SUPABASE_ANON_KEY ??
+    process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return { ok: false, error: 'Supabase audit environment is not configured.' };
+
+  try {
+    const supabase = createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    });
+    const { error } = await supabase.from('privacy_log').insert(buildPrivacyLogRow(input));
+    return { ok: !error, error: error?.message ?? null };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Privacy audit failed.' };
+  }
+}
+
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
@@ -81,7 +114,11 @@ function safeParse(text: string): unknown {
 }
 
 export default function handler(req: VercelRequest, res: VercelResponse) {
-  return handleLlm(req, res, { verifyToken: verifySupabaseToken, fetchImpl: fetch });
+  return handleLlm(req, res, {
+    verifyToken: verifySupabaseToken,
+    fetchImpl: fetch,
+    writeAudit: writeSupabaseAudit,
+  });
 }
 
 // Testable core. The auth boundary runs BEFORE action dispatch and BEFORE any SSE headers are
@@ -114,6 +151,35 @@ export async function handleLlm(req: VercelRequest, res: VercelResponse, deps: L
   if (action !== 'echo' && action !== 'ping') {
     res.status(400).json({ error: "Unknown action. Use 'echo' or 'ping'." });
     return;
+  }
+
+  // Fail closed before SSE and before OpenRouter: if the authenticated audit row cannot land,
+  // there is no external call. Echo never leaves this function and remains intentionally unlogged.
+  if (action === 'ping') {
+    if (!process.env.OPENROUTER_API_KEY) {
+      res.status(503).json({ error: 'OPENROUTER_API_KEY is not set on the server.' });
+      return;
+    }
+    const sentPayload = {
+      action: 'ping',
+      model: asString(body.model) ?? 'anthropic/claude-sonnet-4-6',
+      no_log: body.no_log !== false,
+    };
+    const audit = await deps.writeAudit(token, {
+      userId,
+      target: 'openrouter',
+      action: 'ping',
+      model: sentPayload.model,
+      manifest: buildManifest([]),
+      payloadSha256: await payloadHash(sentPayload),
+      costUsd: null,
+    });
+    if (!audit.ok) {
+      res.status(503).json({
+        error: `Privacy audit unavailable. No provider call was made. ${audit.error ?? ''}`.trim(),
+      });
+      return;
+    }
   }
 
   // Streaming headers — disable proxy/CDN buffering so tokens flush live.

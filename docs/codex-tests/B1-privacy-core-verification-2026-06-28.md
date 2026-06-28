@@ -1,4 +1,42 @@
-# B1 privacy core — pre-flight gate + audit write + RLS (ready to run)
+# B1 privacy core — pre-flight gate + audit write + RLS (RAN 2026-06-28: 1 BLOCKER)
+
+> **Run status (Codex, 2026-06-28): mostly PASS, one blocking FAIL.**
+> Final `privacy_log` count = 1; denied RLS attempts created no rows.
+>
+> | # | Check | Result | Observed |
+> |---|-------|--------|----------|
+> | 1 | Echo ungated | ✅ | streamed, no dialog, privacy_log delta 0 |
+> | 2 | Pre-flight gate before egress | ✅ | expected SENT/WITHHELD lists shown before `/api/llm` |
+> | 3 | Cancel = zero egress | ✅ | no stream, no request, no audit row |
+> | 4 | First approval | ✅ | pong, confirmation shown, exactly **one** audit row |
+> | 5 | SHA-256 integrity | ✅ | recomputed == stored = `f1ad844a05f1f4c13e7c7992f7486a6b9b8bbc7442db44db92e14f3903bdb129` |
+> | 6 | Second same-session ping | ❌ **BLOCKER** | no re-prompt + pong streamed, but **privacy_log delta 0** (egress without a log row). Unlogged req `smkcd-1782651146869-027400e21c06`, `2026-06-28T12:52:26Z` |
+> | 7 | Owner read | ⚠️ partial | first row visible; expected second row absent (consequence of #6) |
+> | 8 | Anonymous RLS | ✅ | `42501` |
+> | 9 | Cross-UID RLS | ✅ | `42501` |
+>
+> **Verdicts:** No un-gated egress = **YES**. Every external call logged exactly once = **NO**.
+>
+> **Active B1 blocker (must fix before B2):** the second (already-approved) ping egressed to
+> OpenRouter but wrote **no** `privacy_log` row. NOTE: the source shows *no* code bypass — both the
+> gated and already-approved paths funnel through `runStream('ping')`, which calls `writePrivacyLog`
+> unconditionally for every ping, and there is no unique constraint on the table. So the missed row
+> is a **failed/dropped client-side insert**, not a skipped call. Root lesson: a best-effort,
+> client-side audit write **cannot guarantee once-per-call** — if the lone insert fails (or the tab
+> navigates/errors after streaming), egress already happened and nothing logs. **Fix direction:**
+> move the audit write **server-side into `/api/llm`** so the row is written atomically once the
+> stream completes (the function already authenticates the user via `getUser`; it can insert with
+> that uid). Keep the pre-flight gate client-side; move only the logging. This also sets up B3's
+> cost-from-`usage` write. Re-run this whole doc after the fix.
+>
+> **Repair implemented after this run:** auditing now lives in `api/llm.ts`, uses the verified
+> caller JWT for an owner-scoped insert, and runs **before** OpenRouter. An audit failure returns
+> 503 before SSE starts and the provider fetch is never called. The client-side insert was removed,
+> preventing duplicate writers. Regression tests cover audit-before-provider ordering, two rows for
+> two identical same-session Pings, and fail-closed zero-egress behavior. The live re-run below is
+> still required after deployment.
+
+---
 
 Verify Wave B **B1** (privacy core) on prod. B1 adds the egress contract every external call must
 pass: a **pre-flight approve-before-send gate** (no un-gated egress) and a **privacy_log audit

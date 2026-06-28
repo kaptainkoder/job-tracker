@@ -12,10 +12,8 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { UserSettings } from '../../shared/types';
 import { supabase } from '../../shared/lib/supabase';
 import { streamLlm } from '../../shared/lib/llmClient';
-import { writePrivacyLog } from '../../shared/lib/privacyLog';
 import {
   buildManifest,
-  payloadHash,
   preflightKey,
   requiresPreflight,
 } from '../../shared/domain/privacy';
@@ -140,7 +138,6 @@ export default function SettingsPage() {
     setStreamError(null);
     setStreamOutput('');
 
-    let streamed = false;
     try {
       await streamLlm({
         action,
@@ -150,7 +147,7 @@ export default function SettingsPage() {
         signal: controller.signal,
         onToken: (token) => setStreamOutput((current) => current + token),
       });
-      streamed = true;
+      if (action === 'ping') setAuditNote('Logged to your privacy log.');
     } catch (error) {
       if (controller.signal.aborted) return;
       setStreamError(error instanceof Error ? error.message : 'Streaming failed.');
@@ -161,21 +158,6 @@ export default function SettingsPage() {
       }
     }
 
-    // Audit write: every external call logs exactly one privacy_log row once it completes. Echo
-    // never leaves the device, so it is not logged. Cost is null until B3 wires it from usage.
-    if (streamed && action === 'ping' && user) {
-      const sentPayload = { action: 'ping', model: values.model, no_log: values.no_log };
-      const { ok, error } = await writePrivacyLog({
-        userId: user.id,
-        target: 'openrouter',
-        action: 'ping',
-        model: values.model,
-        manifest: PING_MANIFEST,
-        payloadSha256: await payloadHash(sentPayload),
-        costUsd: null,
-      });
-      setAuditNote(ok ? 'Logged to your privacy log.' : `Privacy log write failed. ${error ?? ''}`);
-    }
   }
 
   if (loading) {
