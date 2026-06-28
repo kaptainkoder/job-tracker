@@ -52,6 +52,15 @@ Last verified: 2026-06-27.
    no need to create the bucket by hand. Verified: **Table Editor** shows `profile`, `applications`,
    `interview_events`, `outcomes`, `privacy_log`; **Storage → Files** shows `resumes`; an anon REST
    read returns `[]`, while an anon insert is rejected with PostgreSQL `42501` (RLS enforced).
+5b. **Apply later migrations programmatically (no manual SQL-editor paste).** Used for
+   `0002_privacy_log_model.sql` on 2026-06-28. One-time: get the **direct** Postgres connection
+   string — **Settings (gear) → Database → Connection string → URI** — and put it in `.env.local`
+   (git-ignored) as `SUPABASE_DB_URL=postgresql://postgres:<DB-PASSWORD>@db.<project-ref>.supabase.co:5432/postgres`.
+   (The DB password is the one saved at project creation; reset under **Settings → Database** if
+   lost.) Then `npm i -D pg` and run a tiny node script that reads `SUPABASE_DB_URL` from
+   `.env.local`, connects with `ssl:{rejectUnauthorized:false}`, runs the migration file's SQL, and
+   verifies via `information_schema.columns`. Verified 2026-06-28: `privacy_log.model` is `text`,
+   nullable. ⚠️ Never commit or echo the connection string; it stays in `.env.local` only.
 6. **Vercel browser env:** from the linked project folder, run
    `vercel env add VITE_SUPABASE_URL production` and
    `vercel env add VITE_SUPABASE_ANON_KEY production`, then repeat with `development`. These four
