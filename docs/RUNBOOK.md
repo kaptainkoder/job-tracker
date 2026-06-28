@@ -105,7 +105,7 @@ Last verified: 2026-06-27.
    `Python, Machine learning` for XGBoost → **Save profile** → refresh `/profile` and confirm the
    skill lines persist. Anonymous profile reads must still return `[]`; a cross-UID authenticated
    update remains rejected by the existing `own profile` RLS policy. Production browser proof is
-   staged at `docs/codex-tests/B2-gap-verification.md`.
+   staged at `docs/codex-tests/B2/B2-gap-verification.md`.
 
 Last verified: 2026-06-28 by Codex session (dashboard + REST RLS check).
 
@@ -124,7 +124,7 @@ Gotcha: free projects pause after ~7 days idle — first load after a quiet week
    `vercel env add OPENROUTER_API_KEY production` then `… development`.
 3. **Verify:** `vercel env ls` shows `OPENROUTER_API_KEY` for Development + Production (Encrypted).
    Confirmed 2026-06-28. End-to-end stream check is staged in
-   `docs/codex-tests/B0-settings-verification.md` (echo = free; ping = a few tokens).
+   `docs/codex-tests/B0/B0-settings-verification.md` (echo = free; ping = a few tokens).
 Last verified: 2026-06-28.
 
 ## OAuth / external integrations

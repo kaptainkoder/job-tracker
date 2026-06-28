@@ -15,11 +15,19 @@ build/
 *.log
 
 # agent working files — kept on disk, out of the repo's mental model (calm root).
-# Flip these back on if you want them tracked for cross-device backup.
+# Anything that exists for Claude/Codex (plans, memory, agent instructions, verification
+# hand-offs) stays local. Flip these back on if you want them tracked for cross-device backup.
 .claude/
 .Codex/
+.agents/
+AGENTS.md
+CLAUDE.md
+START_HERE.md
+KICKOFF_BRIEF.md
 memory/
 brainstorms/
+design/
+docs/codex-tests/
 
 # private fixtures (real/redacted data the public tree shouldn't carry)
 fixtures/private/
