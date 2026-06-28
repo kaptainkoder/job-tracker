@@ -71,6 +71,14 @@ export interface Outcome {
   notes: string | null;
 }
 
+export interface UserSettings {
+  user_id: string; // = auth user id (PK)
+  model: string; // OpenRouter model id, e.g. 'anthropic/claude-sonnet-4-6' (user-swappable)
+  no_log: boolean; // request zero-retention / no-log provider routing (default true)
+  created_at: string;
+  updated_at: string;
+}
+
 export interface PrivacyLogEntry {
   id: string;
   user_id: string;

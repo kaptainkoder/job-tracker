@@ -61,6 +61,10 @@ Last verified: 2026-06-27.
    `.env.local`, connects with `ssl:{rejectUnauthorized:false}`, runs the migration file's SQL, and
    verifies via `information_schema.columns`. Verified 2026-06-28: `privacy_log.model` is `text`,
    nullable. ⚠️ Never commit or echo the connection string; it stays in `.env.local` only.
+   - **`0003_user_settings.sql` applied 2026-06-28** via this same `SUPABASE_DB_URL` path.
+     Verified: `public.user_settings` exists (`user_id` PK, `model text default
+     'anthropic/claude-sonnet-4-6'`, `no_log boolean default true`, `created_at`/`updated_at`),
+     RLS enabled, policy `own user_settings` (ALL) present.
 6. **Vercel browser env:** from the linked project folder, run
    `vercel env add VITE_SUPABASE_URL production` and
    `vercel env add VITE_SUPABASE_ANON_KEY production`, then repeat with `development`. These four
@@ -96,6 +100,22 @@ Last verified: 2026-06-27.
 Last verified: 2026-06-28 by Codex session (dashboard + REST RLS check).
 
 Gotcha: free projects pause after ~7 days idle — first load after a quiet week is slow.
+
+## LLM provider — OpenRouter (server secret for `/api/llm`)
+> The Wave-B `/api/llm` function reads `OPENROUTER_API_KEY` server-side only. It is **never**
+> `VITE_`-prefixed and never reaches the browser bundle; only the model *choice* is user-facing
+> (stored per-user in `user_settings`). Set 2026-06-28.
+
+1. **Local:** put `OPENROUTER_API_KEY=<your-key>` in `.env.local` (git-ignored). Used by
+   `vercel dev`; the browser never sees it.
+2. **Vercel (prod + dev):** Dashboard → project `job-tracker` → **Settings → Environment
+   Variables → Add New** → Key `OPENROUTER_API_KEY`, Value `<your-key>`, check **Production** and
+   **Development** (leave Preview unchecked — no preview-branch flow) → **Save**. CLI equivalent:
+   `vercel env add OPENROUTER_API_KEY production` then `… development`.
+3. **Verify:** `vercel env ls` shows `OPENROUTER_API_KEY` for Development + Production (Encrypted).
+   Confirmed 2026-06-28. End-to-end stream check is staged in
+   `docs/codex-tests/B0-settings-verification.md` (echo = free; ping = a few tokens).
+Last verified: 2026-06-28.
 
 ## OAuth / external integrations
 _TODO — consent screen, redirect URIs, scopes._

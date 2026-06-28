@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Briefcase, LogOut, ShieldCheck, UserRound, type LucideIcon } from 'lucide-react';
+import { Briefcase, LogOut, Settings, ShieldCheck, UserRound, type LucideIcon } from 'lucide-react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import Brand from '../shared/ui/Brand';
 import ThemeToggle from '../shared/ui/ThemeToggle';
@@ -8,6 +8,7 @@ import { useAuth } from '../features/auth/AuthProvider';
 const NAV: Array<{ to: string; label: string; Icon: LucideIcon }> = [
   { to: '/tracker', label: 'Tracker', Icon: Briefcase },
   { to: '/profile', label: 'Profile', Icon: UserRound },
+  { to: '/settings', label: 'Settings', Icon: Settings },
   { to: '/privacy', label: 'Privacy', Icon: ShieldCheck },
 ];
 
