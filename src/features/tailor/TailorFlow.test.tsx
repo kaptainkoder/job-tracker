@@ -9,6 +9,7 @@ interface TestGlobals {
   __DOM_TESTS_DONE__?: boolean;
   __LLM_CALLS__: Array<{ action: string }>;
   __SUPABASE_INSERTS__: Array<Record<string, unknown>>;
+  __COPIED_TEXT__?: string;
 }
 const globals = globalThis as unknown as TestGlobals;
 const state = (globals.__DOM_TEST_STATE__ ??= { failures: 0 });
@@ -55,7 +56,7 @@ async function mount() {
   await act(async () => {
     root.render(<TailorFlow application={APPLICATION} onClose={() => {}} onArtifactSaved={() => {}} />);
   });
-  await waitForText(/Before anything is generated/i);
+  await waitForText(/Approve before anything is sent/i);
   return async () => {
     await act(async () => root.unmount());
     container.remove();
@@ -63,15 +64,19 @@ async function mount() {
 }
 
 async function main() {
-  await test('gap pause and cancelled preflight cause zero egress and zero artifact writes', async () => {
+  await test('privacy review precedes the gap pause and cancelled exact-call approval causes zero egress', async () => {
     globals.__LLM_CALLS__.length = 0;
     globals.__SUPABASE_INSERTS__.length = 0;
     const cleanup = await mount();
 
-    assert.match(document.body.textContent ?? '', /Python/);
+    assert.doesNotMatch(document.body.textContent ?? '', /What demonstrates Python/i);
+    assert.match(document.body.textContent ?? '', /manifest \+ SHA-256/i);
     assert.equal(globals.__LLM_CALLS__.length, 0, 'unresolved gap must block generation');
+    await act(async () => click('Review privacy & continue'));
+    await waitForText(/Nothing is claimed automatically/i);
+    assert.match(document.body.textContent ?? '', /Python/);
     await act(async () => click('Not in my experience'));
-    await act(async () => click('Continue to privacy review'));
+    await act(async () => click('Generate the kit'));
     await waitForText(/Approve before sending/);
     await act(async () => click('Cancel'));
 
@@ -85,14 +90,15 @@ async function main() {
     globals.__SUPABASE_INSERTS__.length = 0;
     const cleanup = await mount();
 
+    await act(async () => click('Review privacy & continue'));
     await act(async () => click('Not in my experience'));
-    await act(async () => click('Continue to privacy review'));
+    await act(async () => click('Generate the kit'));
     await act(async () => click('Approve & send'));
     await waitForText(/Cover letter sends a request/);
     await act(async () => click('Approve & send'));
     await waitForText(/Interview prep sends a request/);
     await act(async () => click('Approve & send'));
-    await waitForText(/Done/);
+    await waitForText(/Your saved tailoring kit/i);
 
     assert.deepEqual(globals.__LLM_CALLS__.map((call) => call.action), ['tailor', 'cover', 'prep']);
     assert.equal(globals.__SUPABASE_INSERTS__.length, 3);
@@ -101,8 +107,16 @@ async function main() {
       ['tailored-resume', 'cover-letter', 'prep'],
     );
     assert.match(document.body.textContent ?? '', /Generated tailor output/);
+    assert.doesNotMatch(document.body.textContent ?? '', /Generated cover output/);
+    await act(async () => click('Cover letter'));
     assert.match(document.body.textContent ?? '', /Generated cover output/);
+    await act(async () => click('Interview prep'));
     assert.match(document.body.textContent ?? '', /Generated prep output/);
+    assert.match(document.body.textContent ?? '', /Copy/);
+    assert.match(document.body.textContent ?? '', /Download PDF/);
+    await act(async () => click('Download PDF'));
+    await waitForText(/client-side render/i);
+    assert.ok(document.querySelector('iframe[title="A4 résumé preview"]'));
     await cleanup();
   });
 

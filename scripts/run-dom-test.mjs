@@ -38,6 +38,7 @@ const result = await esbuild.build({
   format: 'esm',
   write: false,
   jsx: 'automatic',
+  loader: { '.ttf': 'dataurl' },
   plugins: [stubPlugin],
 });
 

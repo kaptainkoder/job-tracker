@@ -1,8 +1,15 @@
-import { LoaderCircle, ShieldCheck } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { LoaderCircle, LockKeyhole, ShieldCheck } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import type { PrivacyLogEntry } from '../../shared/types';
 import { supabase } from '../../shared/lib/supabase';
+import Badge from '../../shared/ui/Badge';
 import { useAuth } from '../auth/AuthProvider';
+import {
+  computePrivacyMetrics,
+  formatPrivacyAction,
+  formatPrivacyCost,
+  shortenPayloadHash,
+} from './privacyPresentation';
 
 const TARGET_LABEL: Record<PrivacyLogEntry['target'], string> = {
   openrouter: 'OpenRouter',
@@ -10,8 +17,23 @@ const TARGET_LABEL: Record<PrivacyLogEntry['target'], string> = {
 };
 
 function formatWhen(iso: string): string {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime())
+    ? iso
+    : new Intl.DateTimeFormat(undefined, {
+        month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+      }).format(date);
+}
+
+function MetricCard({ label, value, suffix }: { label: string; value: string | number; suffix?: string }) {
+  return (
+    <div className="rounded-xl border border-line bg-surface px-4 py-3 shadow-card">
+      <p className="text-xs text-ink-faint">{label}</p>
+      <p className="mt-1 text-stat font-semibold text-ink">
+        {value}{suffix && <span className="ml-1 text-xs font-normal text-ink-faint">{suffix}</span>}
+      </p>
+    </div>
+  );
 }
 
 export default function PrivacyPage() {
@@ -25,7 +47,6 @@ export default function PrivacyPage() {
     let active = true;
     setLoading(true);
     setLoadError(null);
-    // select('*') so the screen works whether or not the 0002 `model` column is applied yet.
     void supabase
       .from('privacy_log')
       .select('*')
@@ -37,20 +58,18 @@ export default function PrivacyPage() {
         else setEntries((data ?? []) as PrivacyLogEntry[]);
         setLoading(false);
       });
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [user]);
+
+  const metrics = useMemo(() => computePrivacyMetrics(entries), [entries]);
 
   return (
     <div className="animate-rise space-y-6">
       <div>
-        <p className="text-2xs font-semibold uppercase tracking-[0.16em] text-accent">What leaves your machine</p>
+        <p className="text-2xs font-semibold uppercase tracking-[0.16em] text-accent">Provable egress</p>
         <h1 className="mt-1 text-h1 font-semibold text-ink">Privacy</h1>
         <p className="mt-1 max-w-2xl text-sm leading-6 text-ink-soft">
-          Every call this app makes to a third party (OpenRouter, EnhanceCV) is logged here with a
-          plain-English manifest of what was sent, what was withheld, the model, an integrity hash,
-          and the cost. Payloads themselves are never stored.
+          Every third-party call records what was sent, what was withheld, its model, integrity hash, and cost. We store the manifest + hash—never the payload.
         </p>
       </div>
 
@@ -60,49 +79,82 @@ export default function PrivacyPage() {
           <span className="sr-only">Loading privacy log</span>
         </div>
       ) : loadError ? (
-        <div className="card max-w-xl p-6" role="alert">
-          <p className="text-sm text-stage-rejected">{loadError}</p>
-        </div>
-      ) : entries.length === 0 ? (
-        <div className="card flex flex-col items-center gap-3 p-10 text-center">
-          <span className="rounded-xl bg-accent-soft p-2.5 text-accent"><ShieldCheck className="h-6 w-6" /></span>
-          <p className="text-base font-medium text-ink">Nothing has left your data yet</p>
-          <p className="max-w-md text-sm text-ink-soft">
-            This log fills in once tailoring and document generation start making outbound calls
-            (Wave B). Until then, no third party has received any of your data.
-          </p>
-        </div>
+        <div className="card max-w-xl p-6" role="alert"><p className="text-sm text-stage-rejected">{loadError}</p></div>
       ) : (
-        <div className="card overflow-x-auto">
-          <table className="w-full min-w-[44rem] text-left text-sm">
-            <thead className="border-b border-line-soft text-xs uppercase tracking-wide text-ink-faint">
-              <tr>
-                <th className="px-4 py-3 font-medium">When</th>
-                <th className="px-4 py-3 font-medium">Target</th>
-                <th className="px-4 py-3 font-medium">Action</th>
-                <th className="px-4 py-3 font-medium">Model</th>
-                <th className="px-4 py-3 font-medium">Sent</th>
-                <th className="px-4 py-3 font-medium">Withheld</th>
-                <th className="px-4 py-3 font-medium">Hash</th>
-                <th className="px-4 py-3 font-medium">Cost</th>
-              </tr>
-            </thead>
-            <tbody>
-              {entries.map((e) => (
-                <tr key={e.id} className="border-b border-line-soft last:border-0 align-top">
-                  <td className="px-4 py-3 whitespace-nowrap text-ink-soft">{formatWhen(e.created_at)}</td>
-                  <td className="px-4 py-3 text-ink">{TARGET_LABEL[e.target] ?? e.target}</td>
-                  <td className="px-4 py-3 text-ink">{e.action}</td>
-                  <td className="px-4 py-3 text-ink-soft">{e.model ?? <span className="text-ink-faint">—</span>}</td>
-                  <td className="px-4 py-3 text-ink-soft">{e.sent_manifest.join(', ') || <span className="text-ink-faint">—</span>}</td>
-                  <td className="px-4 py-3 text-ink-soft">{e.withheld_manifest.join(', ') || <span className="text-ink-faint">—</span>}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-ink-faint">{e.payload_sha256.slice(0, 10)}…</td>
-                  <td className="px-4 py-3 whitespace-nowrap text-ink-soft">{e.cost_usd == null ? '—' : `$${e.cost_usd}`}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <section className="grid gap-3 sm:grid-cols-3" aria-label="Privacy metrics">
+            <MetricCard label="Total spend" value={formatPrivacyCost(metrics.totalSpendUsd)} />
+            <MetricCard label="Outbound calls" value={metrics.outboundCalls} />
+            <MetricCard label="Egress targets" value={metrics.egressTargets} suffix="/ 2 possible" />
+          </section>
+
+          {entries.length === 0 ? (
+            <section className="rounded-2xl border border-dashed border-line bg-surface px-6 py-14 text-center" aria-labelledby="privacy-empty-heading">
+              <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-surface-2 text-ink-faint"><ShieldCheck className="h-6 w-6" /></span>
+              <h2 id="privacy-empty-heading" className="mt-4 text-h3 font-semibold text-ink">Nothing has left your database yet</h2>
+              <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-ink-soft">
+                When you tailor a résumé or cover letter, every outbound call lands here—what was sent, what was withheld, the cost, and a hash. The payload itself is never stored.
+              </p>
+            </section>
+          ) : (
+            <>
+              <section className="card overflow-hidden" aria-label="Outbound call log">
+                <div className="hidden grid-cols-[6.5rem_7.25rem_minmax(0,1fr)_8.25rem_5.5rem] gap-3 border-b border-line bg-surface-2 px-4 py-3 text-2xs font-semibold uppercase tracking-[0.12em] text-ink-faint md:grid">
+                  <span>Time</span><span>Target</span><span>Action · manifest</span><span>Model</span><span className="text-right">Cost</span>
+                </div>
+                <div className="divide-y divide-line-soft">
+                  {entries.map((entry) => (
+                    <article key={entry.id} className="grid gap-4 px-4 py-4 md:grid-cols-[6.5rem_7.25rem_minmax(0,1fr)_8.25rem_5.5rem] md:gap-3">
+                      <div>
+                        <span className="text-2xs font-semibold uppercase tracking-wide text-ink-faint md:hidden">Time</span>
+                        <p className="mt-1 text-xs leading-5 text-ink-faint md:mt-0">{formatWhen(entry.created_at)}</p>
+                      </div>
+                      <div>
+                        <span className="text-2xs font-semibold uppercase tracking-wide text-ink-faint md:hidden">Target</span>
+                        <span className="mt-1 inline-flex items-center gap-1.5 rounded-sm border border-line bg-surface-2 px-2 py-1 text-xs text-ink-soft md:mt-0">
+                          <span className="h-1.5 w-1.5 rounded-full bg-stage-applied" />
+                          {TARGET_LABEL[entry.target] ?? entry.target}
+                        </span>
+                      </div>
+                      <div className="min-w-0">
+                        <h2 className="text-sm font-semibold text-ink">{formatPrivacyAction(entry.action)}</h2>
+                        <div className="mt-3">
+                          <Badge tone="eyebrow">Sent</Badge>
+                          <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            {entry.sent_manifest.length ? entry.sent_manifest.map((item) => (
+                              <span key={item} className="rounded-sm bg-stage-applied/15 px-2 py-1 text-xs text-stage-applied">{item}</span>
+                            )) : <span className="text-xs text-ink-faint">None</span>}
+                          </div>
+                        </div>
+                        <div className="mt-3">
+                          <Badge tone="eyebrow">Withheld</Badge>
+                          <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            {entry.withheld_manifest.length ? entry.withheld_manifest.map((item) => (
+                              <span key={item} className="rounded-sm border border-line bg-surface-2 px-2 py-1 text-xs text-ink-faint line-through">{item}</span>
+                            )) : <span className="text-xs text-ink-faint">None</span>}
+                          </div>
+                        </div>
+                        <p className="mt-3 break-all font-mono text-micro text-ink-faint" title={entry.payload_sha256}>sha256 · {shortenPayloadHash(entry.payload_sha256)}</p>
+                      </div>
+                      <div>
+                        <span className="text-2xs font-semibold uppercase tracking-wide text-ink-faint md:hidden">Model</span>
+                        <p className="mt-1 break-words text-xs leading-5 text-ink-soft md:mt-0">{entry.model ?? 'Not applicable'}</p>
+                      </div>
+                      <div>
+                        <span className="text-2xs font-semibold uppercase tracking-wide text-ink-faint md:hidden">Cost</span>
+                        <p className="mt-1 text-sm font-semibold text-ink md:mt-0 md:text-right">{formatPrivacyCost(entry.cost_usd)}</p>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+              <p className="flex items-center justify-center gap-2 text-center text-xs text-ink-faint">
+                <LockKeyhole className="h-3.5 w-3.5 shrink-0" />
+                We store a manifest + hash, never the payload. The only possible egress targets are OpenRouter and EnhanceCV.
+              </p>
+            </>
+          )}
+        </>
       )}
     </div>
   );

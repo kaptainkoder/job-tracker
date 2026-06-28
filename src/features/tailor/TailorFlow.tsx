@@ -1,5 +1,7 @@
 import {
-  CheckCircle2,
+  Check,
+  Copy,
+  Download,
   FileCheck2,
   LoaderCircle,
   ShieldCheck,
@@ -27,7 +29,9 @@ import {
 import {
   buildManifest,
   preflightKey,
+  PRIVACY_CATEGORY_LABEL,
   requiresPreflight,
+  type PrivacyManifest,
 } from '../../shared/domain/privacy';
 import { streamLlm } from '../../shared/lib/llmClient';
 import { supabase } from '../../shared/lib/supabase';
@@ -36,8 +40,10 @@ import Button from '../../shared/ui/Button';
 import PreflightModal from '../../shared/ui/PreflightModal';
 import { useAuth } from '../auth/AuthProvider';
 import { ModalShell } from '../tracker/ApplicationForm';
-import { DEFAULT_SETTINGS_FORM, settingsToForm } from '../settings/settings';
+import { DEFAULT_SETTINGS_FORM, modelLabel, settingsToForm } from '../settings/settings';
+import ResumePdfPreview from './ResumePdfPreview';
 import { insertTailorArtifact } from './tailorArtifacts';
+import { buildResumeDocument } from './resumeDocument';
 
 interface TailorFlowProps {
   application: Application;
@@ -52,12 +58,54 @@ interface DecisionDraft {
 
 type DecisionDrafts = Partial<Record<SkillId, DecisionDraft>>;
 type ActionStatus = 'idle' | 'streaming' | 'saved';
+type FlowStage = 'privacy' | 'gaps' | 'generating' | 'results';
 
 const ACTION_STATUS_LABEL: Record<ActionStatus, string> = {
   idle: 'Waiting',
-  streaming: 'Streaming',
+  streaming: 'Generating',
   saved: 'Saved',
 };
+
+const KIT_PRIVACY_MANIFEST: PrivacyManifest = buildManifest([
+  'job-description',
+  'profile-summary',
+  'work-history',
+  'skills',
+  'contact-info',
+]);
+
+const FLOW_STEPS: Array<{ stage: FlowStage; label: string }> = [
+  { stage: 'privacy', label: 'Privacy review' },
+  { stage: 'gaps', label: 'Evidence check' },
+  { stage: 'generating', label: 'Generate' },
+  { stage: 'results', label: 'Results' },
+];
+
+function ManifestColumns({ manifest }: { manifest: PrivacyManifest }) {
+  return (
+    <div className="grid gap-5 sm:grid-cols-2">
+      <div>
+        <Badge tone="eyebrow">Sent</Badge>
+        <ul className="mt-2.5 space-y-1.5 text-sm text-ink">
+          {manifest.sent.map((category) => (
+            <li key={category} className="flex items-center gap-2">
+              <Check className="h-3.5 w-3.5 shrink-0 text-stage-applied" />
+              {PRIVACY_CATEGORY_LABEL[category]}
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div>
+        <Badge tone="eyebrow">Withheld</Badge>
+        <ul className="mt-2.5 space-y-1.5 text-sm text-ink-faint">
+          {manifest.withheld.map((category) => (
+            <li key={category} className="line-through">{PRIVACY_CATEGORY_LABEL[category]}</li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
 
 export default function TailorFlow({ application, onClose, onArtifactSaved }: TailorFlowProps) {
   const { user, session } = useAuth();
@@ -65,9 +113,11 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
   const [settings, setSettings] = useState(DEFAULT_SETTINGS_FORM);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [stage, setStage] = useState<FlowStage>('privacy');
   const [decisions, setDecisions] = useState<DecisionDrafts>({});
   const [resolutions, setResolutions] = useState<FoldedResolutions | null>(null);
   const [currentAction, setCurrentAction] = useState<TailorAction>('tailor');
+  const [activeTab, setActiveTab] = useState<TailorAction>('tailor');
   const [pendingAction, setPendingAction] = useState<TailorAction | null>(null);
   const [approvedKeys, setApprovedKeys] = useState<string[]>([]);
   const [outputs, setOutputs] = useState<Partial<Record<TailorAction, string>>>({});
@@ -76,6 +126,8 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
   });
   const [flowError, setFlowError] = useState<string | null>(null);
   const [auditNote, setAuditNote] = useState<string | null>(null);
+  const [copyNote, setCopyNote] = useState<string | null>(null);
+  const [pdfOpen, setPdfOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -124,10 +176,7 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
   }
 
   function updateEvidence(skill: SkillId, evidence: string) {
-    setDecisions((current) => ({
-      ...current,
-      [skill]: { confirmed: true, evidence },
-    }));
+    setDecisions((current) => ({ ...current, [skill]: { confirmed: true, evidence } }));
   }
 
   function finishGapStep() {
@@ -138,6 +187,7 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
       evidence: decisions[question.skill]?.evidence,
     })));
     setResolutions(folded);
+    setStage('generating');
     requestAction('tailor', folded);
   }
 
@@ -223,10 +273,15 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
       });
       onArtifactSaved(artifact);
       setStatuses((current) => ({ ...current, [action]: 'saved' }));
-      setAuditNote(`${TAILOR_ACTION_LABEL[action]} saved. Its provider call is logged in your Privacy log.`);
+      setAuditNote(`${TAILOR_ACTION_LABEL[action]} saved. Its provider call is logged in Privacy.`);
 
       const next = TAILOR_ACTIONS[TAILOR_ACTIONS.indexOf(action) + 1];
-      if (next) requestAction(next, folded);
+      if (next) {
+        requestAction(next, folded);
+      } else {
+        setActiveTab('tailor');
+        setStage('results');
+      }
     } catch (error) {
       if (controller.signal.aborted) {
         setFlowError(`${TAILOR_ACTION_LABEL[action]} stopped. Nothing was saved.`);
@@ -239,6 +294,18 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
     }
   }
 
+  async function copyActiveOutput() {
+    const content = outputs[activeTab];
+    if (!content) return;
+    setCopyNote(null);
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopyNote(`${TAILOR_ACTION_LABEL[activeTab]} copied.`);
+    } catch {
+      setCopyNote('Copy failed. Select the text and copy it manually.');
+    }
+  }
+
   function closeFlow() {
     abortRef.current?.abort();
     onClose();
@@ -248,8 +315,14 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
   const preflightManifest = activeContext
     ? buildManifest(tailorIncludedCategories(activeContext))
     : buildManifest([]);
-  const complete = TAILOR_ACTIONS.every((action) => statuses[action] === 'saved');
   const streaming = TAILOR_ACTIONS.some((action) => statuses[action] === 'streaming');
+  const activeStep = FLOW_STEPS.findIndex((step) => step.stage === stage);
+  const resumeDocument = useMemo(
+    () => profile && outputs.tailor
+      ? buildResumeDocument({ content: outputs.tailor, profile, application })
+      : null,
+    [application, outputs.tailor, profile],
+  );
 
   return (
     <>
@@ -268,117 +341,175 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
             <p className="text-sm text-stage-rejected">{loadError}</p>
             <a href="/profile" className="mt-3 inline-block text-sm font-medium text-accent hover:underline">Open Profile</a>
           </div>
-        ) : !resolutions ? (
-          <section aria-labelledby="gap-heading">
-            <Badge tone="eyebrow">Step 1 · Evidence check</Badge>
-            <h3 id="gap-heading" className="mt-3 text-h2 font-semibold text-ink">Before anything is generated</h3>
-            <p className="mt-1 max-w-2xl text-sm leading-6 text-ink-soft">
-              This compares the job description with your profile. Nothing leaves the app until every gap is resolved and you approve the privacy review.
-            </p>
+        ) : (
+          <div>
+            <div className="mb-5 flex flex-wrap items-center gap-2" aria-label="Tailor flow progress">
+              {FLOW_STEPS.map((step, index) => (
+                <div key={step.stage} className="flex items-center gap-2">
+                  <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${
+                    index <= activeStep ? 'border-accent/30 bg-accent-soft text-accent' : 'border-line bg-surface-2 text-ink-faint'
+                  }`}>
+                    <span className={`inline-flex h-4 w-4 items-center justify-center rounded-full text-micro ${
+                      index < activeStep ? 'bg-accent text-white' : 'border border-current'
+                    }`}>{index < activeStep ? <Check className="h-2.5 w-2.5" /> : index + 1}</span>
+                    {step.label}
+                  </span>
+                  {index < FLOW_STEPS.length - 1 && <span className="text-ink-faint">→</span>}
+                </div>
+              ))}
+            </div>
 
-            {gap.gaps.length === 0 ? (
-              <div className="mt-5 rounded-xl border border-stage-offer/30 bg-stage-offer/10 p-4 text-sm text-ink">
-                Your profile evidences every recognized skill in this job description. Unknown prose is never guessed.
-              </div>
-            ) : (
-              <div className="mt-5 space-y-4">
-                {gap.gaps.map((question) => {
-                  const decision = decisions[question.skill];
-                  return (
-                    <article key={question.skill} className="rounded-xl border border-line-soft bg-surface-2/50 p-4">
-                      <h4 className="font-semibold text-ink">{question.label}</h4>
-                      <p className="mt-1 text-sm leading-6 text-ink-soft">{question.prompt}</p>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <Button variant={decision?.confirmed ? 'primary' : 'secondary'} size="sm" onClick={() => updateDecision(question.skill, true)}>
-                          I have evidence
-                        </Button>
-                        <Button variant={decision && !decision.confirmed ? 'primary' : 'secondary'} size="sm" onClick={() => updateDecision(question.skill, false)}>
-                          Not in my experience
-                        </Button>
-                      </div>
-                      {decision?.confirmed && (
-                        <div className="mt-3">
-                          <label htmlFor={`evidence-${question.skill}`} className="text-xs font-medium text-ink-soft">What demonstrates {question.label}?</label>
-                          <textarea
-                            id={`evidence-${question.skill}`}
-                            value={decision.evidence}
-                            onChange={(event) => updateEvidence(question.skill, event.target.value)}
-                            rows={2}
-                            className="input mt-1.5 resize-y"
-                            placeholder="A concrete project, responsibility, or result — this becomes the evidence behind the claim."
-                          />
-                        </div>
-                      )}
-                      {decision && !decision.confirmed && (
-                        <p className="mt-3 text-xs text-ink-faint">Kept as a future-growth suggestion only; it will never be presented as experience.</p>
-                      )}
-                    </article>
-                  );
-                })}
-              </div>
+            {stage === 'privacy' && (
+              <section className="card overflow-hidden" aria-labelledby="privacy-review-heading">
+                <div className="flex items-start gap-3 border-b border-line-soft px-5 py-4 sm:px-6">
+                  <span className="rounded-md bg-accent-soft p-2 text-accent"><ShieldCheck className="h-5 w-5" /></span>
+                  <div>
+                    <Badge tone="eyebrow">Step 1 · Privacy review</Badge>
+                    <h3 id="privacy-review-heading" className="mt-2 text-h2 font-semibold text-ink">Approve before anything is sent</h3>
+                    <p className="mt-1 text-sm leading-6 text-ink-soft">
+                      The kit uses three OpenRouter calls with no-log routing. This is the overall boundary; after the evidence check, each exact call still asks for approval immediately before egress.
+                    </p>
+                  </div>
+                </div>
+                <div className="p-5 sm:p-6"><ManifestColumns manifest={KIT_PRIVACY_MANIFEST} /></div>
+                <div className="flex flex-col gap-3 border-t border-line-soft bg-surface-2/50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+                  <p className="max-w-xl text-xs leading-5 text-ink-faint">
+                    A manifest + SHA-256 is logged for every call. The payload itself is never stored, and the server writes its audit row before OpenRouter.
+                  </p>
+                  <div className="flex shrink-0 justify-end gap-2">
+                    <Button variant="secondary" onClick={closeFlow}>Cancel</Button>
+                    <Button onClick={() => setStage('gaps')}><ShieldCheck className="h-4 w-4" /> Review privacy &amp; continue</Button>
+                  </div>
+                </div>
+              </section>
             )}
 
-            <div className="mt-5 flex justify-end gap-2 border-t border-line-soft pt-4">
-              <Button variant="secondary" onClick={closeFlow}>Cancel</Button>
-              <Button disabled={!allGapsResolved} onClick={finishGapStep}>
-                <ShieldCheck className="h-4 w-4" /> Continue to privacy review
-              </Button>
-            </div>
-          </section>
-        ) : (
-          <div className="space-y-5">
-            <div>
-              <Badge tone="eyebrow">Step 2 · Generate and save</Badge>
-              <h3 className="mt-3 text-h2 font-semibold text-ink">One approved call at a time</h3>
-              <p className="mt-1 text-sm leading-6 text-ink-soft">
-                Each document streams live, is written to this application only after completion, and has its own server-owned privacy audit row.
-              </p>
-            </div>
+            {stage === 'gaps' && (
+              <section aria-labelledby="gap-heading">
+                <Badge tone="eyebrow">Step 2 · Evidence check</Badge>
+                <h3 id="gap-heading" className="mt-3 text-h2 font-semibold text-ink">Confirm only what is true</h3>
+                <p className="mt-1 max-w-2xl text-sm leading-6 text-ink-soft">
+                  The JD asks for skills your profile does not evidence yet. Nothing is claimed automatically—confirmed skills need your evidence; everything else stays a future suggestion.
+                </p>
 
-            <ol className="grid gap-2 sm:grid-cols-3" aria-label="Tailoring progress">
-              {TAILOR_ACTIONS.map((action, index) => (
-                <li key={action} className={`rounded-xl border p-3 ${currentAction === action ? 'border-accent bg-accent-soft' : 'border-line-soft bg-surface-2/40'}`}>
-                  <p className="text-xs font-medium text-ink-faint">{index + 1}</p>
-                  <p className="mt-1 text-sm font-semibold text-ink">{TAILOR_ACTION_LABEL[action]}</p>
-                  <p className="mt-0.5 text-xs text-ink-soft">{ACTION_STATUS_LABEL[statuses[action]]}</p>
-                </li>
-              ))}
-            </ol>
-
-            <div className="space-y-3">
-              {TAILOR_ACTIONS.map((action) => outputs[action] !== undefined && (
-                <section key={action} className="rounded-xl border border-line-soft bg-surface-2/40 p-4" aria-label={`${TAILOR_ACTION_LABEL[action]} output`}>
-                  <div className="flex items-center justify-between gap-3">
-                    <h4 className="font-semibold text-ink">{TAILOR_ACTION_LABEL[action]}</h4>
-                    {statuses[action] === 'streaming' ? <LoaderCircle className="h-4 w-4 animate-spin text-accent" /> : <FileCheck2 className="h-4 w-4 text-stage-offer" />}
+                {gap.gaps.length === 0 ? (
+                  <div className="mt-5 rounded-xl border border-stage-offer/30 bg-stage-offer/10 p-4 text-sm text-ink">
+                    Your profile evidences every recognized skill in this job description. Unknown prose is never guessed.
                   </div>
-                  <div className="mt-3 max-h-72 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-ink">
-                    {outputs[action] || <span className="text-ink-faint">Waiting for the first token…</span>}
+                ) : (
+                  <div className="mt-5 space-y-4">
+                    {gap.gaps.map((question) => {
+                      const decision = decisions[question.skill];
+                      return (
+                        <article key={question.skill} className="rounded-xl border border-line-soft bg-surface p-4 shadow-card">
+                          <Badge tone="eyebrow">{question.label}</Badge>
+                          <p className="mt-2 text-sm leading-6 text-ink-soft">{question.prompt}</p>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Button variant={decision?.confirmed ? 'primary' : 'secondary'} size="sm" onClick={() => updateDecision(question.skill, true)}>I have evidence</Button>
+                            <Button variant={decision && !decision.confirmed ? 'primary' : 'secondary'} size="sm" onClick={() => updateDecision(question.skill, false)}>Not in my experience</Button>
+                          </div>
+                          {decision?.confirmed && (
+                            <div className="mt-3">
+                              <label htmlFor={`evidence-${question.skill}`} className="text-xs font-medium text-ink-soft">What demonstrates {question.label}?</label>
+                              <textarea
+                                id={`evidence-${question.skill}`}
+                                value={decision.evidence}
+                                onChange={(event) => updateEvidence(question.skill, event.target.value)}
+                                rows={2}
+                                className="input mt-1.5 resize-y"
+                                placeholder="A concrete project, responsibility, or result—this becomes the evidence behind the claim."
+                              />
+                            </div>
+                          )}
+                          {decision && !decision.confirmed && (
+                            <p className="mt-3 text-xs text-ink-faint">Kept as a future-growth suggestion only; it will never be presented as experience.</p>
+                          )}
+                        </article>
+                      );
+                    })}
                   </div>
-                </section>
-              ))}
-            </div>
+                )}
 
-            <div className="min-h-5" aria-live="polite">
-              {flowError && <p className="text-sm text-stage-rejected" role="alert">{flowError}</p>}
-              {auditNote && <p className="text-sm text-ink-soft">{auditNote} <a href="/privacy" className="font-medium text-accent hover:underline">Open Privacy log</a></p>}
-            </div>
+                <div className="mt-5 flex flex-wrap justify-between gap-2 border-t border-line-soft pt-4">
+                  <Button variant="ghost" onClick={() => setStage('privacy')}>Back to privacy review</Button>
+                  <Button disabled={!allGapsResolved} onClick={finishGapStep}><Sparkles className="h-4 w-4" /> Generate the kit</Button>
+                </div>
+              </section>
+            )}
 
-            <div className="flex flex-wrap justify-end gap-2 border-t border-line-soft pt-4">
-              {streaming && (
-                <Button variant="secondary" onClick={() => abortRef.current?.abort()}>
-                  <Square className="h-4 w-4" /> Stop
-                </Button>
-              )}
-              {!streaming && !complete && !pendingAction && (
-                <Button onClick={() => requestAction(currentAction)}>
-                  <Sparkles className="h-4 w-4" /> Review & generate {TAILOR_ACTION_LABEL[currentAction]}
-                </Button>
-              )}
-              {complete && (
-                <Button onClick={closeFlow}><CheckCircle2 className="h-4 w-4" /> Done</Button>
-              )}
-            </div>
+            {stage === 'generating' && (
+              <section className="card px-5 py-8 text-center sm:px-8 sm:py-10" aria-labelledby="generating-heading">
+                <div className="mx-auto inline-flex items-center gap-2.5 text-sm font-semibold text-ink">
+                  {streaming ? <LoaderCircle className="h-4 w-4 animate-spin text-accent" /> : <ShieldCheck className="h-4 w-4 text-accent" />}
+                  <h3 id="generating-heading">{streaming ? 'Generating your kit…' : `Approve ${TAILOR_ACTION_LABEL[currentAction].toLowerCase()} to continue`}</h3>
+                </div>
+                <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-ink-soft">
+                  {streaming
+                    ? `Streaming from ${modelLabel(settings.model)}. Completed documents are saved one at a time.`
+                    : 'The stricter privacy rule wins: each required call gets its own exact manifest review before it leaves.'}
+                </p>
+                <ol className="mx-auto mt-6 grid max-w-2xl gap-2 text-left sm:grid-cols-3" aria-label="Generation status">
+                  {TAILOR_ACTIONS.map((action) => (
+                    <li key={action} className={`rounded-xl border p-3 ${currentAction === action ? 'border-accent/40 bg-accent-soft' : 'border-line-soft bg-surface-2/50'}`}>
+                      <p className="text-sm font-semibold text-ink">{TAILOR_ACTION_LABEL[action]}</p>
+                      <p className="mt-0.5 text-xs text-ink-soft">{ACTION_STATUS_LABEL[statuses[action]]}</p>
+                    </li>
+                  ))}
+                </ol>
+                <div className="mx-auto mt-6 max-w-xl space-y-2" aria-hidden="true">
+                  <span className="block h-2.5 w-full animate-pulse rounded-full bg-surface-2" />
+                  <span className="block h-2.5 w-4/5 animate-pulse rounded-full bg-surface-2" />
+                  <span className="block h-2.5 w-11/12 animate-pulse rounded-full bg-surface-2" />
+                </div>
+                {flowError && <p className="mt-5 text-sm text-stage-rejected" role="alert">{flowError}</p>}
+                <div className="mt-5 flex justify-center gap-2">
+                  {streaming && <Button variant="secondary" onClick={() => abortRef.current?.abort()}><Square className="h-4 w-4" /> Stop</Button>}
+                  {!streaming && flowError && !pendingAction && <Button onClick={() => requestAction(currentAction)}><Sparkles className="h-4 w-4" /> Try again</Button>}
+                </div>
+              </section>
+            )}
+
+            {stage === 'results' && (
+              <section aria-labelledby="results-heading">
+                <Badge tone="eyebrow">Step 4 · Saved results</Badge>
+                <h3 id="results-heading" className="mt-3 text-h2 font-semibold text-ink">Your saved tailoring kit</h3>
+                <p className="mt-1 text-sm leading-6 text-ink-soft">Each tab is saved to this application. Review before using it—nothing here should outrun your evidence.</p>
+
+                <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex overflow-x-auto rounded-md border border-line bg-surface-2 p-0.5" role="tablist" aria-label="Saved tailoring results">
+                    {TAILOR_ACTIONS.map((action) => (
+                      <button
+                        key={action}
+                        type="button"
+                        role="tab"
+                        aria-selected={activeTab === action}
+                        onClick={() => { setActiveTab(action); setCopyNote(null); }}
+                        className={`whitespace-nowrap rounded-sm px-3 py-2 text-xs font-medium transition ${activeTab === action ? 'bg-surface text-ink shadow-card' : 'text-ink-soft hover:text-ink'}`}
+                      >
+                        {TAILOR_ACTION_LABEL[action]}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <Button variant="secondary" size="sm" onClick={() => void copyActiveOutput()}><Copy className="h-3.5 w-3.5" /> Copy</Button>
+                    <Button size="sm" disabled={!resumeDocument} onClick={() => { setActiveTab('tailor'); setPdfOpen(true); }}><Download className="h-3.5 w-3.5" /> Download PDF</Button>
+                  </div>
+                </div>
+
+                <div className="mt-3 rounded-xl border border-line bg-surface p-5 shadow-card" role="tabpanel" aria-label={`${TAILOR_ACTION_LABEL[activeTab]} result`}>
+                  <div className="mb-3 flex items-center justify-between gap-3 border-b border-line-soft pb-3">
+                    <h4 className="font-semibold text-ink">{TAILOR_ACTION_LABEL[activeTab]}</h4>
+                    <span className="inline-flex items-center gap-1.5 text-xs text-stage-offer"><FileCheck2 className="h-3.5 w-3.5" /> Saved</span>
+                  </div>
+                  <div className="max-h-[28rem] overflow-y-auto whitespace-pre-wrap text-sm leading-7 text-ink-soft">{outputs[activeTab]}</div>
+                </div>
+
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-h-5 text-xs text-ink-faint" aria-live="polite">{copyNote ?? auditNote} {auditNote && <a href="/privacy" className="font-medium text-accent hover:underline">Open Privacy</a>}</div>
+                  <Button onClick={closeFlow}>Done</Button>
+                </div>
+              </section>
+            )}
           </div>
         )}
       </ModalShell>
@@ -391,6 +522,9 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
         onApprove={approvePreflight}
         onCancel={() => setPendingAction(null)}
       />
+      {pdfOpen && resumeDocument && (
+        <ResumePdfPreview document={resumeDocument} application={application} onClose={() => setPdfOpen(false)} />
+      )}
     </>
   );
 }

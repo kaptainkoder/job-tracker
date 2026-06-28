@@ -1,11 +1,11 @@
 import {
+  Check,
   CheckCircle2,
   LoaderCircle,
   LockKeyhole,
   Radio,
   Save,
   ShieldCheck,
-  SlidersHorizontal,
   Square,
 } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
@@ -181,8 +181,6 @@ export default function SettingsPage() {
     );
   }
 
-  const activeModel = MODEL_OPTIONS.find((option) => option.value === values.model);
-
   return (
     <div className="animate-rise max-w-reading space-y-6">
       <div>
@@ -193,73 +191,85 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      <form onSubmit={handleSave} className="card overflow-hidden">
-        <div className="flex items-start gap-3 border-b border-line-soft px-5 py-4 sm:px-6">
-          <span className="rounded-xl bg-accent-soft p-2 text-accent"><SlidersHorizontal className="h-5 w-5" /></span>
-          <div>
-            <h2 className="font-semibold text-ink">Language model</h2>
-            <p className="mt-0.5 text-sm text-ink-soft">Used for tailored resumes, cover letters, and prep.</p>
+      <form onSubmit={handleSave} className="space-y-4">
+        <section className="card p-5 sm:p-6" aria-labelledby="model-heading">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 id="model-heading" className="font-semibold text-ink">Language model</h2>
+              <p className="mt-1 text-sm leading-6 text-ink-soft">Pick the model every tailor and prep call uses. The stored value remains a real OpenRouter slug.</p>
+            </div>
+            <Badge tone="accent" className="shrink-0">Via OpenRouter</Badge>
           </div>
-        </div>
 
-        <div className="p-5 sm:p-6">
-          <label htmlFor="model" className="text-xs font-medium text-ink-soft">Model</label>
-          <select
-            id="model"
-            className="input mt-2"
-            value={values.model}
-            onChange={(event) => update('model', event.target.value)}
-          >
-            {MODEL_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-          {activeModel && <p className="mt-1.5 text-xs text-ink-faint">{activeModel.note}</p>}
-
-          <p className="mt-4 flex items-start gap-2 rounded-xl border border-line-soft bg-surface-2 px-4 py-3 text-xs leading-5 text-ink-soft">
-            <LockKeyhole className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-faint" />
-            <span>
-              Your OpenRouter key is stored as a server secret and never reaches this browser. The model
-              choice above is the only part you control here.
-            </span>
-          </p>
-        </div>
-
-        <div className="flex items-start gap-3 border-y border-line-soft px-5 py-4 sm:px-6">
-          <span className="rounded-xl bg-surface-2 p-2 text-ink-soft"><ShieldCheck className="h-5 w-5" /></span>
-          <div>
-            <h2 className="font-semibold text-ink">Provider privacy</h2>
-            <p className="mt-0.5 text-sm text-ink-soft">Route only to providers that don’t retain your data.</p>
+          <div className="mt-4 space-y-2" role="radiogroup" aria-label="Language model">
+            {MODEL_OPTIONS.map((option) => {
+              const active = values.model === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => update('model', option.value)}
+                  className={`flex w-full items-center justify-between gap-4 rounded-md border px-4 py-3 text-left transition ${
+                    active ? 'border-accent bg-accent-soft' : 'border-line bg-surface hover:bg-surface-2'
+                  }`}
+                >
+                  <span>
+                    <span className="block text-sm font-medium text-ink">{option.label}</span>
+                    <span className="mt-0.5 block text-xs text-ink-faint">{option.note}</span>
+                  </span>
+                  {active && <Check className="h-4 w-4 shrink-0 text-accent" />}
+                </button>
+              );
+            })}
           </div>
-        </div>
+        </section>
 
-        <div className="flex items-center justify-between gap-4 p-5 sm:p-6">
-          <div>
-            <p className="text-sm font-medium text-ink">No-log / zero-retention providers</p>
-            <p className="mt-0.5 text-xs text-ink-faint">On by default. Requests deny provider data collection.</p>
+        <section className="card p-5 sm:p-6" aria-labelledby="privacy-settings-heading">
+          <div className="flex items-center gap-2.5">
+            <span className="rounded-md bg-surface-2 p-2 text-ink-soft"><ShieldCheck className="h-4 w-4" /></span>
+            <h2 id="privacy-settings-heading" className="font-semibold text-ink">Privacy</h2>
           </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={values.no_log}
-            aria-label="No-log providers"
-            onClick={() => update('no_log', !values.no_log)}
-            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-              values.no_log ? 'bg-accent' : 'bg-surface-2 border border-line'
-            }`}
-          >
-            <span
-              className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-card transition ${
-                values.no_log ? 'translate-x-6' : 'translate-x-1'
+
+          <div className="mt-4 flex items-center justify-between gap-4 border-b border-line-soft pb-4">
+            <div>
+              <p className="text-sm font-medium text-ink">No-log / zero-retention providers only</p>
+              <p className="mt-0.5 text-xs leading-5 text-ink-faint">On by default. Routes calls only to providers that do not retain or train on your data.</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={values.no_log}
+              aria-label="No-log providers"
+              onClick={() => update('no_log', !values.no_log)}
+              className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                values.no_log ? 'bg-accent' : 'border border-line bg-surface-2'
               }`}
-            />
-          </button>
-        </div>
+            >
+              <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-card transition ${values.no_log ? 'translate-x-6' : 'translate-x-1'}`} />
+            </button>
+          </div>
 
-        <div className="flex flex-col gap-3 border-t border-line-soft bg-surface-2/50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-          <div className="min-h-5" aria-live="polite">
+          <div className="flex items-start gap-3 pt-4">
+            <span className="rounded-md bg-surface-2 p-2 text-ink-soft"><LockKeyhole className="h-4 w-4" /></span>
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-ink">OpenRouter key is a server secret</p>
+              <p className="mt-1 text-xs leading-5 text-ink-soft">
+                The API key lives only in the server function—it never reaches the browser and is never stored in your database. You do not paste it here.
+              </p>
+              <p className="mt-2 inline-flex max-w-full items-center rounded-sm border border-line bg-surface-2 px-2.5 py-1.5 font-mono text-xs text-ink-faint">
+                sk-or-•••• managed server-side · not editable
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-h-5 text-xs text-ink-faint" aria-live="polite">
             {formError && <p className="text-sm text-stage-rejected" role="alert">{formError}</p>}
             {formSuccess && <p className="flex items-center gap-1.5 text-sm text-stage-offer"><CheckCircle2 className="h-4 w-4" />{formSuccess}</p>}
+            {!formError && !formSuccess && <p>Stored per-user under row-level security.</p>}
           </div>
           <Button type="submit" size="lg" disabled={saving}>
             {saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
