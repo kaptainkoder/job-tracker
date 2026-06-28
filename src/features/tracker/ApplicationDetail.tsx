@@ -1,5 +1,6 @@
 import {
   AlarmClock,
+  Download,
   ExternalLink,
   FileCheck2,
   LoaderCircle,
@@ -9,7 +10,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import type { Application, Artifact, Outcome, Stage } from '../../shared/types';
+import type { Application, Artifact, Outcome, Profile, Stage } from '../../shared/types';
 import { STAGES, STAGE_LABEL, isStale } from '../../shared/domain/stages';
 import { supabase } from '../../shared/lib/supabase';
 import Button from '../../shared/ui/Button';
@@ -32,6 +33,8 @@ import { applyStageChange, formatRelativeActivity, formatSalary } from './applic
 import { ModalShell } from './ApplicationForm';
 import TailorFlow from '../tailor/TailorFlow';
 import { ARTIFACT_KIND_LABEL, loadTailorArtifacts } from '../tailor/tailorArtifacts';
+import ResumePdfPreview from '../tailor/ResumePdfPreview';
+import { buildResumeDocument, type ResumeDocument } from '../tailor/resumeDocument';
 
 interface ApplicationDetailProps {
   application: Application;
@@ -71,6 +74,9 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
   const [tailoring, setTailoring] = useState(false);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [artifactsLoading, setArtifactsLoading] = useState(true);
+  const [pdfDocument, setPdfDocument] = useState<ResumeDocument | null>(null);
+  const [pdfLoadingId, setPdfLoadingId] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -133,6 +139,27 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
     onChanged();
   }
 
+  async function openSavedResumePdf(artifact: Artifact) {
+    if (!user || artifact.kind !== 'tailored-resume') return;
+    setPdfLoadingId(artifact.id);
+    setPdfError(null);
+    const { data, error: profileError } = await supabase
+      .from('profile')
+      .select('*')
+      .eq('id', user.id)
+      .maybeSingle();
+    setPdfLoadingId(null);
+    if (profileError || !data) {
+      setPdfError(`Could not prepare the saved résumé PDF. ${profileError?.message ?? 'Profile not found.'}`);
+      return;
+    }
+    setPdfDocument(buildResumeDocument({
+      content: artifact.content,
+      profile: data as Profile,
+      application,
+    }));
+  }
+
   const suggestedStage = suggestedStageForOutcome(form.kind);
   const offerMove = suggestedStage && suggestedStage !== application.stage;
 
@@ -181,6 +208,16 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
     setSavingOutcome(false);
     setLogging(false);
     setForm(emptyOutcomeForm());
+  }
+
+  if (pdfDocument) {
+    return (
+      <ResumePdfPreview
+        document={pdfDocument}
+        application={application}
+        onClose={() => setPdfDocument(null)}
+      />
+    );
   }
 
   if (tailoring) {
@@ -265,11 +302,25 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
                       <span className="text-xs text-ink-faint">{new Date(artifact.created_at).toLocaleDateString()}</span>
                     </summary>
                     <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap border-t border-line-soft pt-3 font-sans text-sm leading-6 text-ink-soft">{artifact.content}</pre>
+                    {artifact.kind === 'tailored-resume' && (
+                      <div className="mt-3 flex justify-end">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          disabled={pdfLoadingId !== null}
+                          onClick={() => void openSavedResumePdf(artifact)}
+                        >
+                          {pdfLoadingId === artifact.id ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                          {pdfLoadingId === artifact.id ? 'Preparing PDF…' : 'Preview PDF'}
+                        </Button>
+                      </div>
+                    )}
                   </details>
                 </li>
               ))}
             </ul>
           )}
+          {pdfError && <p className="mt-2 text-sm text-stage-rejected" role="alert">{pdfError}</p>}
           {!application.jd_text?.trim() && (
             <p className="mt-2 text-xs text-ink-faint">Add the job description in Edit before tailoring. Missing text is never guessed.</p>
           )}

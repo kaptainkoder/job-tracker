@@ -16,6 +16,7 @@ interface InsertSink {
   __SUPABASE_INSERTS__: unknown[];
 }
 const inserts = () => (globalThis as unknown as InsertSink).__SUPABASE_INSERTS__;
+const rows = () => (globalThis as unknown as { __SUPABASE_ROWS__: { artifacts: unknown[] } }).__SUPABASE_ROWS__;
 
 // Tiny deterministic harness. We don't use node:test here because its exitCode is only set
 // asynchronously at process end, which races the runner's forced exit (React keeps the loop
@@ -81,6 +82,14 @@ function clickByText(text: string) {
   btn!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 }
 
+async function waitForText(text: RegExp) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (text.test(document.body.textContent ?? '')) return;
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
+  }
+  assert.match(document.body.textContent ?? '', text);
+}
+
 async function mount() {
   const container = document.createElement('div');
   document.body.appendChild(container);
@@ -101,6 +110,7 @@ async function mount() {
 async function main() {
 await test('future outcome date is blocked: inline error, form stays open, zero inserts', async () => {
   inserts().length = 0;
+  rows().artifacts = [];
   const { cleanup } = await mount();
 
   // Open the outcome form.
@@ -129,6 +139,7 @@ await test('future outcome date is blocked: inline error, form stays open, zero 
 
 await test('control: a valid (today) outcome date does insert exactly once', async () => {
   inserts().length = 0;
+  rows().artifacts = [];
   const { cleanup } = await mount();
 
   await act(async () => clickByText('Log outcome'));
@@ -143,6 +154,34 @@ await test('control: a valid (today) outcome date does insert exactly once', asy
 
   // Proves the harness genuinely drives the submit path — so the zero-insert above is meaningful.
   assert.equal(inserts().length, 1, 'a valid date inserts exactly one outcome');
+
+  await cleanup();
+});
+
+await test('saved tailored résumé opens and closes its PDF preview without another LLM run', async () => {
+  inserts().length = 0;
+  rows().artifacts = [{
+    id: 'artifact-resume-1',
+    user_id: 'user-1',
+    application_id: APP.id,
+    kind: 'tailored-resume',
+    content: '# Karan\n\n## Experience\n\n- Built a tested data pipeline.',
+    model: 'anthropic/claude-sonnet-4-6',
+    created_at: '2026-06-29T00:00:00Z',
+  }];
+  const { cleanup } = await mount();
+  await waitForText(/1 artifact/);
+
+  await act(async () => clickByText('Preview PDF'));
+  await waitForText(/client-side render/i);
+  assert.ok(document.querySelector('iframe[title="A4 résumé preview"]'));
+  assert.equal(inserts().length, 0, 'previewing a saved artifact must not insert or regenerate anything');
+
+  await act(async () => {
+    document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  });
+  assert.match(document.body.textContent ?? '', /Saved tailoring/);
+  assert.equal(document.querySelector('[aria-labelledby="pdf-preview-heading"]'), null);
 
   await cleanup();
 });
