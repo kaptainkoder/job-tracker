@@ -92,7 +92,7 @@ const TAILOR_TASK: Record<TailorAction, string> = {
     'never as things to claim.',
 };
 
-function renderProfile(profile: TailorProfile): string {
+function renderProfile(profile: TailorProfile, includeContactInfo: boolean): string {
   const lines: string[] = [];
   const add = (label: string, v: string | null | undefined) => {
     if (v && v.trim()) lines.push(`${label}: ${v.trim()}`);
@@ -100,10 +100,12 @@ function renderProfile(profile: TailorProfile): string {
   add('Name', profile.fullName);
   add('Current title', profile.currentTitle);
   add('Current company', profile.currentCompany);
-  add('Email', profile.email);
-  add('Phone', profile.phone);
-  add('LinkedIn', profile.linkedinUrl);
-  add('GitHub', profile.githubUrl);
+  if (includeContactInfo) {
+    add('Email', profile.email);
+    add('Phone', profile.phone);
+    add('LinkedIn', profile.linkedinUrl);
+    add('GitHub', profile.githubUrl);
+  }
   const skills = profile.skills.map((s) => s.trim()).filter(Boolean);
   lines.push(`Skills (evidenced): ${skills.length ? skills.join(', ') : '(none listed)'}`);
   return lines.join('\n');
@@ -128,7 +130,7 @@ export function buildTailorMessages(ctx: TailorContext): ChatMessage[] {
     ctx.jdText?.trim() || '(not provided)',
     '',
     'Candidate profile (the ONLY truthful source — do not go beyond it):',
-    renderProfile(ctx.profile),
+    renderProfile(ctx.profile, ctx.action === 'cover'),
     '',
     'Confirmed truthful additions (backed by the candidate’s own evidence — safe to use):',
     additions,

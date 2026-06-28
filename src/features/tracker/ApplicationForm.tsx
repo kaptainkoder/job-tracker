@@ -82,6 +82,7 @@ export default function ApplicationForm({ mode, application, onClose, onSaved }:
       company: current.company || parsed.company,
       role: current.role || parsed.role,
       job_url: current.job_url || parsed.job_url,
+      jd_text: current.jd_text || paste.trim(),
       salary_currency: current.salary_currency || parsed.salary_currency,
       stage: parsed.stage,
     }));
@@ -172,6 +173,19 @@ export default function ApplicationForm({ mode, application, onClose, onSaved }:
         </div>
 
         <div>
+          <label htmlFor="jd-text" className="text-xs font-medium text-ink-soft">Job description</label>
+          <textarea
+            id="jd-text"
+            value={values.jd_text}
+            onChange={(e) => update('jd_text', e.target.value)}
+            rows={6}
+            placeholder="Paste the posting here. Tailoring compares this text with your evidenced profile skills."
+            className="input mt-2 resize-y"
+          />
+          <p className="mt-1.5 text-xs text-ink-faint">Required for tailoring. Missing requirements are asked about before anything is generated.</p>
+        </div>
+
+        <div>
           <label htmlFor="notes" className="text-xs font-medium text-ink-soft">Notes</label>
           <textarea id="notes" value={values.notes} onChange={(e) => update('notes', e.target.value)} rows={3} placeholder="Anything worth remembering about this one." className="input mt-2 resize-y" />
         </div>
@@ -193,7 +207,17 @@ export default function ApplicationForm({ mode, application, onClose, onSaved }:
   );
 }
 
-export function ModalShell({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function ModalShell({
+  title,
+  onClose,
+  children,
+  contentClassName = 'max-w-2xl',
+}: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+  contentClassName?: string;
+}) {
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (event.key === 'Escape') onClose();
@@ -208,7 +232,7 @@ export function ModalShell({ title, onClose, children }: { title: string; onClos
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-ink/40 p-4 backdrop-blur-sm sm:p-8" role="dialog" aria-modal="true" aria-label={title}>
-      <div className="card my-auto w-full max-w-2xl p-5 sm:p-6 animate-rise">
+      <div className={`card my-auto w-full p-5 sm:p-6 animate-rise ${contentClassName}`}>
         <div className="mb-5 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-ink">{title}</h2>
           <button type="button" onClick={onClose} aria-label="Close" className="rounded-xl p-2 text-ink-faint transition hover:bg-surface-2 hover:text-ink"><X className="h-4 w-4" /></button>

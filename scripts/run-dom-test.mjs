@@ -25,6 +25,9 @@ const stubPlugin = {
     build.onResolve({ filter: /[\\/]auth[\\/]AuthProvider$/ }, () => ({
       path: path.resolve(root, 'test/stubs/AuthProvider.tsx'),
     }));
+    build.onResolve({ filter: /[\\/]shared[\\/]lib[\\/]llmClient$/ }, () => ({
+      path: path.resolve(root, 'test/stubs/llmClient.ts'),
+    }));
   },
 };
 

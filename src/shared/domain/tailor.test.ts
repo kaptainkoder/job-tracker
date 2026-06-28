@@ -22,6 +22,8 @@ function ctx(action: TailorContext['action']): TailorContext {
       phone: '+1 555 0100',
       currentTitle: 'Data Engineer',
       currentCompany: 'Globex',
+      linkedinUrl: 'https://linkedin.com/in/karan',
+      githubUrl: 'https://github.com/karan',
       skills: ['Python', 'SQL'],
     },
     truthfulAdditions: [{ skill: 'kubernetes', evidence: 'Ran a 12-node k8s cluster at Globex for 2 years.' }],
@@ -57,6 +59,18 @@ test('tailor + prep send JD/profile/work/skills but NOT contact-info', () => {
 test('cover letter adds contact-info (so the gate re-prompts every time)', () => {
   const cats = tailorIncludedCategories(ctx('cover'));
   assert.equal(cats.includes('contact-info'), true);
+});
+
+test('contact details appear only in cover payloads, matching the privacy manifest', () => {
+  for (const action of ['tailor', 'prep'] as const) {
+    const [, user] = buildTailorMessages(ctx(action));
+    assert.doesNotMatch(user.content, /karan@example\.com|\+1 555 0100|linkedin\.com|github\.com/);
+  }
+  const [, cover] = buildTailorMessages(ctx('cover'));
+  assert.match(cover.content, /karan@example\.com/);
+  assert.match(cover.content, /\+1 555 0100/);
+  assert.match(cover.content, /linkedin\.com/);
+  assert.match(cover.content, /github\.com/);
 });
 
 // --- no-fabrication contract in the assembled messages ----------------------------------------

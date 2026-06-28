@@ -69,6 +69,10 @@ Last verified: 2026-06-27.
      Verified through `information_schema.columns`: `public.profile.skills` is `text[]`,
      `NOT NULL`, default `'{}'::text[]`; profile RLS remains enabled. Re-running the migration is
      safe (`add column if not exists`).
+   - **`0005_artifacts.sql` applied 2026-06-28** via this same `SUPABASE_DB_URL` path.
+     Verified directly in PostgreSQL: `public.artifacts` exists with RLS enabled, policy
+     `own artifacts` is present, and deferred constraint `outcomes_artifact_id_fkey` points outcomes
+     at generated artifacts. The migration is idempotent (policy recreated; FK catalog-guarded).
 6. **Vercel browser env:** from the linked project folder, run
    `vercel env add VITE_SUPABASE_URL production` and
    `vercel env add VITE_SUPABASE_ANON_KEY production`, then repeat with `development`. These four

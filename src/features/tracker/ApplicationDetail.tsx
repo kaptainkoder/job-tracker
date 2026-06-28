@@ -1,13 +1,15 @@
 import {
   AlarmClock,
   ExternalLink,
+  FileCheck2,
   LoaderCircle,
   Pencil,
   Plus,
+  Sparkles,
   Trash2,
 } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import type { Application, Outcome, Stage } from '../../shared/types';
+import type { Application, Artifact, Outcome, Stage } from '../../shared/types';
 import { STAGES, STAGE_LABEL, isStale } from '../../shared/domain/stages';
 import { supabase } from '../../shared/lib/supabase';
 import Button from '../../shared/ui/Button';
@@ -28,6 +30,8 @@ import {
 } from '../outcomes/outcomes';
 import { applyStageChange, formatRelativeActivity, formatSalary } from './applications';
 import { ModalShell } from './ApplicationForm';
+import TailorFlow from '../tailor/TailorFlow';
+import { ARTIFACT_KIND_LABEL, loadTailorArtifacts } from '../tailor/tailorArtifacts';
 
 interface ApplicationDetailProps {
   application: Application;
@@ -64,6 +68,9 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
   const [formErrors, setFormErrors] = useState<OutcomeFieldErrors>({});
   const [alsoMove, setAlsoMove] = useState(true);
   const [savingOutcome, setSavingOutcome] = useState(false);
+  const [tailoring, setTailoring] = useState(false);
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  const [artifactsLoading, setArtifactsLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
@@ -76,6 +83,24 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
         if (!active) return;
         setOutcomes((data ?? []) as Outcome[]);
         setOutcomesLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [application.id]);
+
+  useEffect(() => {
+    let active = true;
+    setArtifactsLoading(true);
+    void loadTailorArtifacts(application.id)
+      .then((rows) => {
+        if (active) setArtifacts(rows);
+      })
+      .catch(() => {
+        if (active) setArtifacts([]);
+      })
+      .finally(() => {
+        if (active) setArtifactsLoading(false);
       });
     return () => {
       active = false;
@@ -158,6 +183,16 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
     setForm(emptyOutcomeForm());
   }
 
+  if (tailoring) {
+    return (
+      <TailorFlow
+        application={application}
+        onClose={() => setTailoring(false)}
+        onArtifactSaved={(artifact) => setArtifacts((current) => [artifact, ...current])}
+      />
+    );
+  }
+
   return (
     <ModalShell title="Application" onClose={onClose}>
       <div className="space-y-5">
@@ -175,6 +210,13 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            <Button
+              disabled={!application.jd_text?.trim()}
+              title={application.jd_text?.trim() ? undefined : 'Add the job description before tailoring.'}
+              onClick={() => setTailoring(true)}
+            >
+              <Sparkles className="h-4 w-4" /> Tailor for this job
+            </Button>
             <label htmlFor="stage-select" className="sr-only">Change stage</label>
             <select id="stage-select" value={application.stage} disabled={busy} onChange={(e) => changeStage(e.target.value as Stage)} className="input w-auto py-2">
               {STAGES.map((s) => <option key={s} value={s}>{STAGE_LABEL[s]}</option>)}
@@ -199,7 +241,39 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
           <Row label="Applied on">{value(application.date_applied)}</Row>
           <Row label="Last activity">{formatRelativeActivity(application.last_activity_at)}</Row>
           <Row label="Notes">{value(application.notes)}</Row>
+          <Row label="Job description">{value(application.jd_text)}</Row>
         </dl>
+
+        <section aria-labelledby="artifacts-heading">
+          <div className="mb-2 flex items-center justify-between">
+            <h4 id="artifacts-heading" className="text-sm font-semibold text-ink">Saved tailoring</h4>
+            <span className="text-xs text-ink-faint">{artifacts.length} artifact{artifacts.length === 1 ? '' : 's'}</span>
+          </div>
+          {artifactsLoading ? (
+            <p className="px-1 text-sm text-ink-faint">Loading saved documents…</p>
+          ) : artifacts.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-line px-4 py-3 text-sm text-ink-faint">
+              No tailored documents saved yet.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {artifacts.map((artifact) => (
+                <li key={artifact.id}>
+                  <details className="rounded-xl border border-line-soft bg-surface-2/30 px-3 py-2">
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm">
+                      <span className="flex items-center gap-2 font-medium text-ink"><FileCheck2 className="h-4 w-4 text-stage-offer" />{ARTIFACT_KIND_LABEL[artifact.kind]}</span>
+                      <span className="text-xs text-ink-faint">{new Date(artifact.created_at).toLocaleDateString()}</span>
+                    </summary>
+                    <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap border-t border-line-soft pt-3 font-sans text-sm leading-6 text-ink-soft">{artifact.content}</pre>
+                  </details>
+                </li>
+              ))}
+            </ul>
+          )}
+          {!application.jd_text?.trim() && (
+            <p className="mt-2 text-xs text-ink-faint">Add the job description in Edit before tailoring. Missing text is never guessed.</p>
+          )}
+        </section>
 
         {/* Outcome loop */}
         <section aria-labelledby="outcomes-heading">

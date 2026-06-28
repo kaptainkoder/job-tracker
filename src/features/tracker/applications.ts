@@ -150,6 +150,7 @@ export interface ApplicationFormValues {
   stage: Stage;
   priority: Priority;
   job_url: string;
+  jd_text: string;
   job_location: string;
   salary_min: string;
   salary_max: string;
@@ -165,6 +166,7 @@ export const EMPTY_APPLICATION_FORM: ApplicationFormValues = {
   stage: 'lead',
   priority: 'medium',
   job_url: '',
+  jd_text: '',
   job_location: '',
   salary_min: '',
   salary_max: '',
@@ -179,6 +181,7 @@ export function applicationToForm(app: Application): ApplicationFormValues {
     stage: app.stage,
     priority: app.priority,
     job_url: app.job_url ?? '',
+    jd_text: app.jd_text ?? '',
     job_location: app.job_location ?? '',
     salary_min: app.salary_min == null ? '' : String(app.salary_min),
     salary_max: app.salary_max == null ? '' : String(app.salary_max),
@@ -248,6 +251,7 @@ export type ApplicationPayload = Pick<
   | 'stage'
   | 'priority'
   | 'job_url'
+  | 'jd_text'
   | 'job_location'
   | 'salary_min'
   | 'salary_max'
@@ -265,6 +269,7 @@ export function applicationFormToPayload(values: ApplicationFormValues): Applica
     stage: values.stage,
     priority: values.priority,
     job_url: values.job_url.trim() || null,
+    jd_text: values.jd_text.trim() || null,
     job_location: values.job_location.trim() || null,
     salary_min: min,
     salary_max: max,

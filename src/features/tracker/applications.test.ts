@@ -145,6 +145,7 @@ test('form payload trims required fields, nulls blanks, and parses salary number
     company: '  Acme  ',
     role: '  Engineer ',
     job_url: '',
+    jd_text: '  Python and SQL required.  ',
     salary_min: '120,000',
     salary_max: '150000',
     salary_currency: 'USD',
@@ -156,6 +157,7 @@ test('form payload trims required fields, nulls blanks, and parses salary number
     stage: 'lead',
     priority: 'medium',
     job_url: null,
+    jd_text: 'Python and SQL required.',
     job_location: null,
     salary_min: 120000,
     salary_max: 150000,
@@ -210,6 +212,7 @@ test('applicationToForm round-trips nullable columns to blank strings', () => {
     stage: 'interviewing',
     priority: 'high',
     job_url: null,
+    jd_text: null,
     job_location: null,
     salary_min: null,
     salary_max: 90000,
@@ -218,6 +221,7 @@ test('applicationToForm round-trips nullable columns to blank strings', () => {
   } as Application;
   const form = applicationToForm(app);
   assert.equal(form.job_url, '');
+  assert.equal(form.jd_text, '');
   assert.equal(form.salary_min, '');
   assert.equal(form.salary_max, '90000');
   assert.equal(form.stage, 'interviewing');
