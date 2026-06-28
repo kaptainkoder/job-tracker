@@ -85,7 +85,8 @@ function deps(over: Partial<LlmDeps>): LlmDeps {
   return {
     verifyToken: async () => null,
     fetchImpl: spyFetch().impl,
-    writeAudit: async () => ({ ok: true, error: null }),
+    writeAudit: async () => ({ ok: true, error: null, id: 'audit-1' }),
+    updateAuditCost: async () => {},
     ...over,
   };
 }
@@ -152,7 +153,7 @@ test('valid token: echo streams progressively without any provider fetch', async
       fetchImpl: fetchSpy.impl,
       writeAudit: async () => {
         auditCalls += 1;
-        return { ok: true, error: null };
+        return { ok: true, error: null, id: 'audit-1' };
       },
     }),
   );
@@ -195,7 +196,7 @@ test('valid token: ping reaches the provider exactly once and streams pong', asy
       writeAudit: async (_token, input) => {
         order.push('audit');
         audits.push(input);
-        return { ok: true, error: null };
+        return { ok: true, error: null, id: 'audit-1' };
       },
     }),
   );
@@ -231,7 +232,7 @@ test('repeat same-session pings each write one audit row (identical payloads are
     fetchImpl,
     writeAudit: async () => {
       auditCalls += 1;
-      return { ok: true, error: null };
+      return { ok: true, error: null, id: 'audit-1' };
     },
   });
 
@@ -252,7 +253,7 @@ test('audit failure fails closed before SSE and before any provider egress', asy
     deps({
       verifyToken: async () => VALID_USER,
       fetchImpl: fetchSpy.impl,
-      writeAudit: async () => ({ ok: false, error: 'database unavailable' }),
+      writeAudit: async () => ({ ok: false, error: 'database unavailable', id: null }),
     }),
   );
 
@@ -272,4 +273,119 @@ test('unknown action is rejected with 400 only after auth passes', async () => {
   );
   assert.equal(res.statusCode, 400);
   assert.equal(fetchSpy.calls, 0);
+});
+
+// --- B3: tailor / cover / prep actions ------------------------------------------------------
+
+// A provider stream that emits one content delta, a usage frame with a real cost, then [DONE].
+function tailorProviderFetch(onCall: () => void) {
+  return (async () => {
+    onCall();
+    const enc = new TextEncoder();
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(enc.encode('data: {"choices":[{"delta":{"content":"# Résumé"}}]}\n'));
+          controller.enqueue(enc.encode('data: {"usage":{"cost":0.0123}}\n'));
+          controller.enqueue(enc.encode('data: [DONE]\n'));
+          controller.close();
+        },
+      }),
+      { status: 200 },
+    );
+  }) as unknown as typeof fetch;
+}
+
+const TAILOR_BODY = {
+  action: 'tailor',
+  model: 'anthropic/claude-sonnet-4-6',
+  application_id: 'app-1',
+  included_categories: ['job-description', 'profile-summary', 'work-history', 'skills'],
+  messages: [
+    { role: 'system', content: 'no fabrication' },
+    { role: 'user', content: 'JD + profile' },
+  ],
+};
+
+test('tailor: audit lands before egress with the right slug/manifest, streams once, backfills cost', async () => {
+  process.env.OPENROUTER_API_KEY = 'test-key';
+  let providerCalls = 0;
+  const order: string[] = [];
+  const audits: AuditInput[] = [];
+  const costUpdates: Array<{ id: string; cost: number }> = [];
+
+  const res = mockRes();
+  await handleLlm(
+    mockReq('Bearer good-token', TAILOR_BODY),
+    res as never,
+    deps({
+      verifyToken: async () => VALID_USER,
+      fetchImpl: tailorProviderFetch(() => {
+        providerCalls += 1;
+        order.push('provider');
+      }),
+      writeAudit: async (_token, input) => {
+        order.push('audit');
+        audits.push(input);
+        return { ok: true, error: null, id: 'audit-9' };
+      },
+      updateAuditCost: async (_token, id, cost) => {
+        order.push('cost');
+        costUpdates.push({ id, cost });
+      },
+    }),
+  );
+
+  assert.equal(providerCalls, 1, 'tailor reaches OpenRouter exactly once');
+  assert.deepEqual(order, ['audit', 'provider', 'cost'], 'audit before egress; cost backfilled after');
+  assert.equal(audits[0]?.action, 'tailor-resume', 'privacy-log slug for the tailor action');
+  assert.equal(audits[0]?.applicationId, 'app-1');
+  assert.deepEqual(audits[0]?.manifest.sent, ['job-description', 'profile-summary', 'work-history', 'skills']);
+  assert.match(audits[0]?.payloadSha256 ?? '', /^[0-9a-f]{64}$/);
+  assert.equal(audits[0]?.costUsd ?? null, null, 'cost is null at pre-egress write time');
+  assert.deepEqual(costUpdates, [{ id: 'audit-9', cost: 0.0123 }], 'real cost backfilled onto the row');
+  const joined = res.chunks.join('');
+  assert.match(joined, /"token":"# Résumé"/);
+  assert.match(joined, /data: \[DONE\]/);
+});
+
+test('tailor: audit failure fails closed — 503, no provider egress', async () => {
+  process.env.OPENROUTER_API_KEY = 'test-key';
+  const fetchSpy = spyFetch();
+  const res = mockRes();
+  await handleLlm(
+    mockReq('Bearer good-token', TAILOR_BODY),
+    res as never,
+    deps({
+      verifyToken: async () => VALID_USER,
+      fetchImpl: fetchSpy.impl,
+      writeAudit: async () => ({ ok: false, error: 'db down', id: null }),
+    }),
+  );
+  assert.equal(res.statusCode, 503);
+  assert.equal(fetchSpy.calls, 0, 'no tailor egress when the audit cannot be written');
+  assert.equal(res.headers['content-type'], undefined, 'SSE does not begin on audit failure');
+  assert.match(String((res.body as { error?: string }).error), /No provider call was made/);
+});
+
+test('tailor: malformed payload (no messages) is 400 — before any audit or egress', async () => {
+  process.env.OPENROUTER_API_KEY = 'test-key';
+  const fetchSpy = spyFetch();
+  let auditCalls = 0;
+  const res = mockRes();
+  await handleLlm(
+    mockReq('Bearer good-token', { action: 'tailor', model: 'anthropic/claude-sonnet-4-6' }),
+    res as never,
+    deps({
+      verifyToken: async () => VALID_USER,
+      fetchImpl: fetchSpy.impl,
+      writeAudit: async () => {
+        auditCalls += 1;
+        return { ok: true, error: null, id: 'audit-1' };
+      },
+    }),
+  );
+  assert.equal(res.statusCode, 400);
+  assert.equal(auditCalls, 0, 'no audit row for a malformed request');
+  assert.equal(fetchSpy.calls, 0, 'no egress for a malformed request');
 });

@@ -1,14 +1,22 @@
-import { parseLlmFrame } from '../domain/llm';
+import { parseLlmFrame, type ChatMessage } from '../domain/llm';
+import type { PrivacyCategory } from '../domain/privacy';
 
 // Browser-side caller for the streaming /api/llm function. Reads the SSE body and invokes
 // onToken for each token as it arrives, so the UI renders progressively. The SSE wire format
 // + parsing live in shared/domain/llm.ts (tested) — this file is just transport.
 
 export interface StreamLlmOptions {
-  action: 'echo' | 'ping';
+  action: 'echo' | 'ping' | 'tailor' | 'cover' | 'prep';
+  /** echo only. */
   message?: string;
   model?: string;
   noLog?: boolean;
+  /** tailor/cover/prep: the client-assembled chat messages (see shared/domain/tailor.ts). */
+  messages?: ChatMessage[];
+  /** tailor/cover/prep: categories sent, for the server's manifest + audit (B1). */
+  includedCategories?: PrivacyCategory[];
+  /** tailor/cover/prep: the application this generation is for (links the audit row). */
+  applicationId?: string | null;
   /** Supabase session token — the function rejects unauthenticated callers. */
   accessToken: string | null;
   onToken: (token: string) => void;
@@ -27,6 +35,9 @@ export async function streamLlm(opts: StreamLlmOptions): Promise<void> {
       message: opts.message,
       model: opts.model,
       no_log: opts.noLog,
+      messages: opts.messages,
+      included_categories: opts.includedCategories,
+      application_id: opts.applicationId,
     }),
     signal: opts.signal,
   });

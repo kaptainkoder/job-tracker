@@ -4,6 +4,7 @@ import {
   buildOpenRouterBody,
   isDone,
   parseOpenRouterDelta,
+  parseOpenRouterUsage,
   parseLlmFrame,
   sseTokenFrame,
   sseErrorFrame,
@@ -26,6 +27,25 @@ test('buildOpenRouterBody denies data collection when no-log is on', () => {
   });
   assert.equal(body.max_tokens, 16);
   assert.deepEqual(body.provider, { data_collection: 'deny' });
+});
+
+test('buildOpenRouterBody requests a usage frame only when asked', () => {
+  const without = buildOpenRouterBody({ model: 'm', messages: [{ role: 'user', content: 'hi' }] });
+  assert.equal('usage' in without, false);
+  const withUsage = buildOpenRouterBody({
+    model: 'm',
+    messages: [{ role: 'user', content: 'hi' }],
+    usage: true,
+  });
+  assert.deepEqual(withUsage.usage, { include: true });
+});
+
+test('parseOpenRouterUsage returns the real cost only from a usage frame', () => {
+  assert.equal(parseOpenRouterUsage(JSON.stringify({ usage: { cost: 0.0123 } })), 0.0123);
+  assert.equal(parseOpenRouterUsage(JSON.stringify({ choices: [{ delta: { content: 'x' } }] })), null);
+  assert.equal(parseOpenRouterUsage('[DONE]'), null);
+  assert.equal(parseOpenRouterUsage('not json'), null);
+  assert.equal(parseOpenRouterUsage(JSON.stringify({ usage: { cost: 'free' } })), null);
 });
 
 test('parseOpenRouterDelta extracts content and ignores non-content frames', () => {

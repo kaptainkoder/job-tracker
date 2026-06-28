@@ -74,6 +74,20 @@ export interface Outcome {
   notes: string | null;
 }
 
+// Generated tailor output (Wave B · B3). One row per generated document; linked to an application
+// and (via outcomes.artifact_id) optionally to the outcome it was sent with. Mirrors 0005_artifacts.sql.
+export type ArtifactKind = 'tailored-resume' | 'cover-letter' | 'prep';
+
+export interface Artifact {
+  id: string;
+  user_id: string;
+  application_id: string;
+  kind: ArtifactKind;
+  content: string; // generated markdown / text
+  model: string | null; // OpenRouter model that produced it
+  created_at: string;
+}
+
 export interface UserSettings {
   user_id: string; // = auth user id (PK)
   model: string; // OpenRouter model id, e.g. 'anthropic/claude-sonnet-4-6' (user-swappable)

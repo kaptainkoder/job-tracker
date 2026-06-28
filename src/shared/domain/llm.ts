@@ -27,16 +27,21 @@ export interface OpenRouterRequestInput {
   maxTokens?: number;
   /** When true, route only to providers that honour zero-retention (the locked privacy posture). */
   noLog?: boolean;
+  /** When true, ask OpenRouter to emit a final `usage` (incl. real `cost`) for the audit row. */
+  usage?: boolean;
 }
 
 // Build the OpenRouter chat-completions body. Always streams. When noLog is set, the
-// provider routing preference forbids data collection (no-log / zero-retention).
+// provider routing preference forbids data collection (no-log / zero-retention). When usage is
+// set, request the trailing usage frame so B3 can audit the per-call cost. Deterministic field set
+// (no undefined keys) so payloadHash() over this body is recompute-verifiable.
 export function buildOpenRouterBody(input: OpenRouterRequestInput): Record<string, unknown> {
   return {
     model: input.model,
     messages: input.messages,
     max_tokens: input.maxTokens ?? 256,
     stream: true,
+    ...(input.usage ? { usage: { include: true } } : {}),
     ...(input.noLog ? { provider: { data_collection: 'deny' } } : {}),
   };
 }
@@ -56,6 +61,22 @@ export function parseOpenRouterDelta(dataLine: string): string | null {
     const json = JSON.parse(data) as { choices?: Array<{ delta?: { content?: unknown } }> };
     const token = json.choices?.[0]?.delta?.content;
     return typeof token === 'string' && token.length > 0 ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+// Parse an OpenRouter SSE `data:` payload for a trailing usage frame and return the real per-call
+// cost in USD, or null when this frame carries no usage cost. OpenRouter attaches `usage` (with a
+// `cost` field, in USD) to a frame near the end of the stream when `usage: { include: true }` was
+// requested. Used by api/llm.ts to backfill the audit row's cost_usd after the stream completes.
+export function parseOpenRouterUsage(dataLine: string): number | null {
+  const data = dataLine.trim();
+  if (!data || isDone(data)) return null;
+  try {
+    const json = JSON.parse(data) as { usage?: { cost?: unknown } };
+    const cost = json.usage?.cost;
+    return typeof cost === 'number' && Number.isFinite(cost) ? cost : null;
   } catch {
     return null;
   }

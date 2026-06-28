@@ -6,16 +6,21 @@ import {
   extractBearerToken,
   isDone,
   parseOpenRouterDelta,
+  parseOpenRouterUsage,
   sseTokenFrame,
   sseErrorFrame,
   SSE_DONE,
+  type ChatMessage,
 } from '../src/shared/domain/llm.js'; // .js ext required: Vercel runs api/ as Node ESM, no bundler rewrite
 import {
   buildManifest,
   buildPrivacyLogRow,
   payloadHash,
+  PRIVACY_CATEGORIES,
   type AuditInput,
+  type PrivacyCategory,
 } from '../src/shared/domain/privacy.js';
+import { isTailorAction, TAILOR_PRIVACY_ACTION } from '../src/shared/domain/tailor.js';
 
 // The single Wave-B server surface: an action-routed, streaming LLM endpoint. It holds the
 // OpenRouter secret and streams tokens back as SSE (`data: {"token":"..."}`), so generation
@@ -39,7 +44,12 @@ export interface LlmDeps {
   /** The fetch used to reach OpenRouter. Tests assert it is never called on a rejected token. */
   fetchImpl: typeof fetch;
   /** Persist one owner-scoped row before paid egress; failure must prevent the provider call. */
-  writeAudit: (token: string, input: AuditInput) => Promise<{ ok: boolean; error: string | null }>;
+  writeAudit: (
+    token: string,
+    input: AuditInput,
+  ) => Promise<{ ok: boolean; error: string | null; id: string | null }>;
+  /** Backfill the audit row's cost after the stream completes (best-effort; row already exists). */
+  updateAuditCost: (token: string, id: string, costUsd: number) => Promise<void>;
 }
 
 // Verify a Supabase access token by asking the project's auth server who it belongs to. This
@@ -73,26 +83,48 @@ async function verifySupabaseToken(token: string): Promise<string | null> {
 
 // Co-locate audit persistence with egress. The verified caller JWT is attached to this client so
 // the existing profile-owner RLS boundary also protects privacy_log inserts.
-async function writeSupabaseAudit(
-  token: string,
-  input: AuditInput,
-): Promise<{ ok: boolean; error: string | null }> {
+function auditClient(token: string) {
   const url = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL;
   const key =
     process.env.SUPABASE_ANON_KEY ??
     process.env.VITE_SUPABASE_ANON_KEY ??
     process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) return { ok: false, error: 'Supabase audit environment is not configured.' };
+  if (!url || !key) return null;
+  return createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { headers: { Authorization: `Bearer ${token}` } },
+  });
+}
+
+async function writeSupabaseAudit(
+  token: string,
+  input: AuditInput,
+): Promise<{ ok: boolean; error: string | null; id: string | null }> {
+  const supabase = auditClient(token);
+  if (!supabase) return { ok: false, error: 'Supabase audit environment is not configured.', id: null };
 
   try {
-    const supabase = createClient(url, key, {
-      auth: { persistSession: false, autoRefreshToken: false },
-      global: { headers: { Authorization: `Bearer ${token}` } },
-    });
-    const { error } = await supabase.from('privacy_log').insert(buildPrivacyLogRow(input));
-    return { ok: !error, error: error?.message ?? null };
+    // Return the inserted id so the cost can be backfilled once the stream's usage is known.
+    const { data, error } = await supabase
+      .from('privacy_log')
+      .insert(buildPrivacyLogRow(input))
+      .select('id')
+      .single();
+    return { ok: !error, error: error?.message ?? null, id: (data?.id as string | undefined) ?? null };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : 'Privacy audit failed.' };
+    return { ok: false, error: error instanceof Error ? error.message : 'Privacy audit failed.', id: null };
+  }
+}
+
+// Backfill cost_usd on an existing audit row. Best-effort: the logging guarantee is already met by
+// the pre-egress insert, so a failure here is swallowed (the row simply keeps cost_usd = null).
+async function updateSupabaseAuditCost(token: string, id: string, costUsd: number): Promise<void> {
+  const supabase = auditClient(token);
+  if (!supabase) return;
+  try {
+    await supabase.from('privacy_log').update({ cost_usd: costUsd }).eq('id', id);
+  } catch {
+    /* swallow — cost backfill is best-effort */
   }
 }
 
@@ -118,6 +150,7 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
     verifyToken: verifySupabaseToken,
     fetchImpl: fetch,
     writeAudit: writeSupabaseAudit,
+    updateAuditCost: updateSupabaseAuditCost,
   });
 }
 
@@ -148,30 +181,37 @@ export async function handleLlm(req: VercelRequest, res: VercelResponse, deps: L
 
   const body = parseBody(req);
   const action = body.action;
-  if (action !== 'echo' && action !== 'ping') {
-    res.status(400).json({ error: "Unknown action. Use 'echo' or 'ping'." });
+  const tailorAction = isTailorAction(action) ? action : null;
+  if (action !== 'echo' && action !== 'ping' && !tailorAction) {
+    res.status(400).json({ error: "Unknown action. Use 'echo', 'ping', 'tailor', 'cover', or 'prep'." });
     return;
   }
 
-  // Fail closed before SSE and before OpenRouter: if the authenticated audit row cannot land,
-  // there is no external call. Echo never leaves this function and remains intentionally unlogged.
+  // The exact OpenRouter request body for a paid streaming action, assembled before egress so its
+  // hash can be audited. Null for the free echo action. `auditId` lets the cost be backfilled later.
+  let openRouterBody: Record<string, unknown> | null = null;
+  let auditId: string | null = null;
+
+  // ping: a tiny fixed real call (proves key + routing). Fail closed before SSE and before egress.
   if (action === 'ping') {
     if (!process.env.OPENROUTER_API_KEY) {
       res.status(503).json({ error: 'OPENROUTER_API_KEY is not set on the server.' });
       return;
     }
-    const sentPayload = {
-      action: 'ping',
-      model: asString(body.model) ?? 'anthropic/claude-sonnet-4-6',
-      no_log: body.no_log !== false,
-    };
+    const model = asString(body.model) ?? 'anthropic/claude-sonnet-4-6';
+    openRouterBody = buildOpenRouterBody({
+      model,
+      messages: [{ role: 'user', content: 'Reply with exactly one word: pong' }],
+      maxTokens: 16,
+      noLog: body.no_log !== false,
+    });
     const audit = await deps.writeAudit(token, {
       userId,
       target: 'openrouter',
       action: 'ping',
-      model: sentPayload.model,
+      model,
       manifest: buildManifest([]),
-      payloadSha256: await payloadHash(sentPayload),
+      payloadSha256: await payloadHash(openRouterBody),
       costUsd: null,
     });
     if (!audit.ok) {
@@ -180,6 +220,46 @@ export async function handleLlm(req: VercelRequest, res: VercelResponse, deps: L
       });
       return;
     }
+    auditId = audit.id;
+  }
+
+  // tailor / cover / prep: real generation from a client-assembled payload. The messages + manifest
+  // come from the browser (B3 tailor.ts); the hash is computed HERE over the exact body sent, and
+  // the audit row is written BEFORE egress — fail closed (503, zero provider calls) if it can't land.
+  if (tailorAction) {
+    if (!process.env.OPENROUTER_API_KEY) {
+      res.status(503).json({ error: 'OPENROUTER_API_KEY is not set on the server.' });
+      return;
+    }
+    const parsed = parseTailorRequest(body);
+    if ('error' in parsed) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    openRouterBody = buildOpenRouterBody({
+      model: parsed.model,
+      messages: parsed.messages,
+      maxTokens: 1500,
+      noLog: parsed.noLog,
+      usage: true,
+    });
+    const audit = await deps.writeAudit(token, {
+      userId,
+      applicationId: parsed.applicationId,
+      target: 'openrouter',
+      action: TAILOR_PRIVACY_ACTION[tailorAction],
+      model: parsed.model,
+      manifest: buildManifest(parsed.categories),
+      payloadSha256: await payloadHash(openRouterBody),
+      costUsd: null,
+    });
+    if (!audit.ok) {
+      res.status(503).json({
+        error: `Privacy audit unavailable. No provider call was made. ${audit.error ?? ''}`.trim(),
+      });
+      return;
+    }
+    auditId = audit.id;
   }
 
   // Streaming headers — disable proxy/CDN buffering so tokens flush live.
@@ -193,7 +273,10 @@ export async function handleLlm(req: VercelRequest, res: VercelResponse, deps: L
     if (action === 'echo') {
       await streamEcho(res, asString(body.message) ?? ECHO_DEFAULT);
     } else {
-      await streamPing(res, body, deps.fetchImpl);
+      // ping + tailor actions share the provider-streaming path; openRouterBody was assembled above.
+      const cost = await streamOpenRouter(res, openRouterBody as Record<string, unknown>, deps.fetchImpl);
+      // Backfill the real per-call cost onto the already-written audit row (best-effort).
+      if (cost !== null && auditId) await deps.updateAuditCost(token, auditId, cost);
     }
     res.write(SSE_DONE);
   } catch (error) {
@@ -201,6 +284,53 @@ export async function handleLlm(req: VercelRequest, res: VercelResponse, deps: L
   } finally {
     res.end();
   }
+}
+
+interface ParsedTailor {
+  model: string;
+  noLog: boolean;
+  messages: ChatMessage[];
+  categories: PrivacyCategory[];
+  applicationId: string | null;
+}
+
+// Validate the client-assembled tailor request. Returns an error string for any malformed input so
+// the handler can 400 BEFORE writing an audit row or touching OpenRouter.
+function parseTailorRequest(body: Record<string, unknown>): ParsedTailor | { error: string } {
+  const model = asString(body.model);
+  if (!model) return { error: 'A model is required.' };
+  const messages = parseMessages(body.messages);
+  if (!messages || messages.length === 0) return { error: 'A non-empty messages array is required.' };
+  return {
+    model,
+    noLog: body.no_log !== false, // default ON (locked privacy posture)
+    messages,
+    categories: parseCategories(body.included_categories),
+    applicationId: asString(body.application_id) ?? null,
+  };
+}
+
+function parseMessages(value: unknown): ChatMessage[] | null {
+  if (!Array.isArray(value)) return null;
+  const out: ChatMessage[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') return null;
+    const role = (item as { role?: unknown }).role;
+    const content = (item as { content?: unknown }).content;
+    if ((role !== 'system' && role !== 'user' && role !== 'assistant') || typeof content !== 'string') {
+      return null;
+    }
+    out.push({ role, content });
+  }
+  return out;
+}
+
+// Keep only categories from the canonical vocabulary — a client can never widen the manifest to an
+// unknown label, and the "withheld" list stays complete + comparable.
+function parseCategories(value: unknown): PrivacyCategory[] {
+  if (!Array.isArray(value)) return [];
+  const known = new Set<string>(PRIVACY_CATEGORIES);
+  return value.filter((c): c is PrivacyCategory => typeof c === 'string' && known.has(c));
 }
 
 // Free, no-egress proof of the streaming transport: emit the message token-by-token.
@@ -212,14 +342,15 @@ async function streamEcho(res: VercelResponse, message: string) {
   }
 }
 
-// Minimal real OpenRouter streaming call — proves the key + no-log routing work. Kept tiny
-// (one short prompt, 16 max tokens) to respect the small budget.
-async function streamPing(res: VercelResponse, body: Record<string, unknown>, fetchImpl: typeof fetch) {
+// Real OpenRouter streaming call for a pre-assembled body (ping or tailor/cover/prep). Returns the
+// per-call cost parsed from the trailing usage frame, or null if the provider sent none.
+async function streamOpenRouter(
+  res: VercelResponse,
+  body: Record<string, unknown>,
+  fetchImpl: typeof fetch,
+): Promise<number | null> {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) throw new Error('OPENROUTER_API_KEY is not set on the server.');
-
-  const model = asString(body.model) ?? 'anthropic/claude-sonnet-4-6';
-  const noLog = body.no_log !== false; // default ON (locked privacy posture)
 
   const upstream = await fetchImpl(OPENROUTER_URL, {
     method: 'POST',
@@ -229,14 +360,7 @@ async function streamPing(res: VercelResponse, body: Record<string, unknown>, fe
       'HTTP-Referer': 'https://job-tracker-sage-two.vercel.app',
       'X-Title': 'Job Tracker',
     },
-    body: JSON.stringify(
-      buildOpenRouterBody({
-        model,
-        messages: [{ role: 'user', content: 'Reply with exactly one word: pong' }],
-        maxTokens: 16,
-        noLog,
-      }),
-    ),
+    body: JSON.stringify(body),
   });
 
   if (!upstream.ok || !upstream.body) {
@@ -244,14 +368,19 @@ async function streamPing(res: VercelResponse, body: Record<string, unknown>, fe
     throw new Error(`OpenRouter error ${upstream.status}: ${detail.slice(0, 300)}`);
   }
 
-  await pipeOpenRouterSse(upstream.body, res);
+  return pipeOpenRouterSse(upstream.body, res);
 }
 
-// Read OpenRouter's SSE stream line-by-line and re-emit content deltas in our wire format.
-async function pipeOpenRouterSse(body: ReadableStream<Uint8Array>, res: VercelResponse) {
+// Read OpenRouter's SSE stream line-by-line, re-emit content deltas in our wire format, and capture
+// the per-call cost from the trailing usage frame (when `usage: { include: true }` was requested).
+async function pipeOpenRouterSse(
+  body: ReadableStream<Uint8Array>,
+  res: VercelResponse,
+): Promise<number | null> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let cost: number | null = null;
 
   for (;;) {
     const { value, done } = await reader.read();
@@ -264,9 +393,12 @@ async function pipeOpenRouterSse(body: ReadableStream<Uint8Array>, res: VercelRe
       buffer = buffer.slice(newlineIndex + 1);
       if (!line.startsWith('data:')) continue;
       const data = line.slice(5).trim();
-      if (isDone(data)) return;
+      if (isDone(data)) return cost;
       const token = parseOpenRouterDelta(data);
       if (token) res.write(sseTokenFrame(token));
+      const frameCost = parseOpenRouterUsage(data);
+      if (frameCost !== null) cost = frameCost;
     }
   }
+  return cost;
 }
