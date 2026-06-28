@@ -16,6 +16,9 @@ export interface Profile {
   linkedin_url: string | null;
   github_url: string | null;
   resume_path: string | null; // Supabase storage path to the base resume
+  // Truthful, user-editable skill lines — the "evidenced" side of the B2 gap-interview diff.
+  // Stored as the user's raw surface strings; gap.ts normalizes + implication-expands at diff time.
+  skills: string[];
   created_at: string;
   updated_at: string;
 }

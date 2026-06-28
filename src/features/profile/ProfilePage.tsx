@@ -7,20 +7,24 @@ import {
   LoaderCircle,
   LockKeyhole,
   Save,
+  Sparkles,
   Upload,
   UserRound,
 } from 'lucide-react';
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import type { Profile } from '../../shared/types';
 import { supabase } from '../../shared/lib/supabase';
+import { extractSkills, impliedFrom, skillLabel } from '../../shared/domain/gap';
 import Button from '../../shared/ui/Button';
 import Input from '../../shared/ui/Input';
 import { useAuth } from '../auth/AuthProvider';
 import {
   EMPTY_PROFILE_FORM,
   baseResumePath,
+  parseSkillsInput,
   profileFormToPayload,
   profileToForm,
+  skillsToText,
   validatePdfFile,
   validateProfileForm,
   type ProfileFieldErrors,
@@ -32,6 +36,7 @@ export default function ProfilePage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [values, setValues] = useState<ProfileFormValues>(EMPTY_PROFILE_FORM);
+  const [skillsText, setSkillsText] = useState('');
   const [fieldErrors, setFieldErrors] = useState<ProfileFieldErrors>({});
   const [resumePath, setResumePath] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -62,6 +67,7 @@ export default function ProfilePage() {
         } else {
           const profile = data as Profile | null;
           setValues(profileToForm(profile, user.email ?? ''));
+          setSkillsText(skillsToText(profile?.skills));
           setResumePath(profile?.resume_path ?? null);
         }
         setLoading(false);
@@ -79,6 +85,20 @@ export default function ProfilePage() {
     setFormSuccess(null);
   }
 
+  function updateSkills(value: string) {
+    setSkillsText(value);
+    setFormError(null);
+    setFormSuccess(null);
+  }
+
+  // Review preview: what the user's skill lines ALSO evidence via the implication graph
+  // (e.g. a line on XGBoost evidences Python + Machine learning). Shown so the inference is
+  // visible and reviewable, never applied silently.
+  const inferredSkills = useMemo(
+    () => impliedFrom(extractSkills(parseSkillsInput(skillsText).join('\n'))),
+    [skillsText],
+  );
+
   async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!user) return;
@@ -89,10 +109,11 @@ export default function ProfilePage() {
     setFormSuccess(null);
     if (Object.keys(errors).length > 0) return;
 
+    const skills = parseSkillsInput(skillsText);
     setSaving(true);
     const { data, error } = await supabase
       .from('profile')
-      .upsert({ id: user.id, ...profileFormToPayload(values) }, { onConflict: 'id' })
+      .upsert({ id: user.id, ...profileFormToPayload(values), skills }, { onConflict: 'id' })
       .select('*')
       .single();
     setSaving(false);
@@ -104,6 +125,7 @@ export default function ProfilePage() {
 
     const profile = data as Profile;
     setValues(profileToForm(profile, user.email ?? ''));
+    setSkillsText(skillsToText(profile.skills));
     setResumePath(profile.resume_path);
     setFormSuccess('Profile saved.');
   }
@@ -241,6 +263,41 @@ export default function ProfilePage() {
         <div className="grid gap-5 p-5 sm:grid-cols-2 sm:p-6">
           <Input id="linkedin-url" label="LinkedIn URL" type="url" inputMode="url" value={values.linkedin_url} onChange={(event) => updateField('linkedin_url', event.target.value)} error={fieldErrors.linkedin_url} placeholder="https://linkedin.com/in/…" />
           <Input id="github-url" label="GitHub URL" type="url" inputMode="url" value={values.github_url} onChange={(event) => updateField('github_url', event.target.value)} error={fieldErrors.github_url} placeholder="https://github.com/…" />
+        </div>
+
+        <div className="flex items-start gap-3 border-y border-line-soft px-5 py-4 sm:px-6">
+          <span className="rounded-xl bg-surface-2 p-2 text-ink-soft"><Sparkles className="h-5 w-5" /></span>
+          <div>
+            <h2 className="font-semibold text-ink">Skills</h2>
+            <p className="mt-0.5 text-sm text-ink-soft">
+              One per line — only what you can back. Tailoring asks before claiming any skill a job
+              wants that isn’t here; it never invents one.
+            </p>
+          </div>
+        </div>
+        <div className="p-5 sm:p-6">
+          <label htmlFor="skills" className="text-xs font-medium text-ink-soft">Your skills</label>
+          <textarea
+            id="skills"
+            value={skillsText}
+            onChange={(event) => updateSkills(event.target.value)}
+            rows={6}
+            spellCheck={false}
+            placeholder={'Python\nSQL\nXGBoost'}
+            className="input mt-2 resize-y"
+          />
+          {inferredSkills.length > 0 && (
+            <div className="mt-3 rounded-xl border border-line-soft bg-surface-2 px-4 py-3">
+              <p className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-[0.16em] text-accent">
+                <Sparkles className="h-3.5 w-3.5" />Also evidenced
+              </p>
+              <p className="mt-1.5 text-sm leading-6 text-ink-soft">
+                Your entries imply{' '}
+                <span className="font-medium text-ink">{inferredSkills.map(skillLabel).join(', ')}</span>
+                {' '}— tailoring will count these as evidence too. Remove a line if that isn’t true for you.
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-col gap-3 border-t border-line-soft bg-surface-2/50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">

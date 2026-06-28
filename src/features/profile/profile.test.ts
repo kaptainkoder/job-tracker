@@ -3,8 +3,10 @@ import { test } from 'node:test';
 import type { Profile } from '../../shared/types';
 import {
   baseResumePath,
+  parseSkillsInput,
   profileFormToPayload,
   profileToForm,
+  skillsToText,
   validatePdfFile,
   validateProfileForm,
   type ProfileFormValues,
@@ -39,6 +41,7 @@ test('profile form hydrates nullable fields and falls back to the auth email', (
     ...profileFormToPayload(values),
     id: 'owner-id',
     resume_path: null,
+    skills: [],
     created_at: '2026-06-28T00:00:00Z',
     updated_at: '2026-06-28T00:00:00Z',
   } satisfies Profile;
@@ -58,6 +61,13 @@ test('profile validation reports malformed email and web URLs', () => {
   assert.ok(errors.linkedin_url);
   assert.ok(errors.github_url);
   assert.deepEqual(validateProfileForm(values), {});
+});
+
+test('skills input parses lines, trims, drops blanks, and de-dupes case-insensitively', () => {
+  assert.deepEqual(parseSkillsInput('XGBoost\n  Python  \n\nxgboost\nSQL'), ['XGBoost', 'Python', 'SQL']);
+  assert.deepEqual(parseSkillsInput('   \n  '), []);
+  assert.equal(skillsToText(['XGBoost', 'Python']), 'XGBoost\nPython');
+  assert.equal(skillsToText(null), '');
 });
 
 test('base resume path is deterministic and owner-scoped', () => {

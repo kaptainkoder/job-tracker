@@ -65,6 +65,10 @@ Last verified: 2026-06-27.
      Verified: `public.user_settings` exists (`user_id` PK, `model text default
      'anthropic/claude-sonnet-4-6'`, `no_log boolean default true`, `created_at`/`updated_at`),
      RLS enabled, policy `own user_settings` (ALL) present.
+   - **`0004_profile_skills.sql` applied 2026-06-28** via this same `SUPABASE_DB_URL` path.
+     Verified through `information_schema.columns`: `public.profile.skills` is `text[]`,
+     `NOT NULL`, default `'{}'::text[]`; profile RLS remains enabled. Re-running the migration is
+     safe (`add column if not exists`).
 6. **Vercel browser env:** from the linked project folder, run
    `vercel env add VITE_SUPABASE_URL production` and
    `vercel env add VITE_SUPABASE_ANON_KEY production`, then repeat with `development`. These four
@@ -96,6 +100,12 @@ Last verified: 2026-06-27.
    ```
    Verified 2026-06-28: anon profile read returned `[]`; anon resume request returned HTTP 400;
    cross-UID insert returned `42501`.
+9. **Verify B2 profile skills:** authenticated app → **Profile → Skills → Your skills** → enter one
+   truthful skill per line (for example `XGBoost`, `SQL`) → confirm **Also evidenced** visibly lists
+   `Python, Machine learning` for XGBoost → **Save profile** → refresh `/profile` and confirm the
+   skill lines persist. Anonymous profile reads must still return `[]`; a cross-UID authenticated
+   update remains rejected by the existing `own profile` RLS policy. Production browser proof is
+   staged at `docs/codex-tests/B2-gap-verification.md`.
 
 Last verified: 2026-06-28 by Codex session (dashboard + REST RLS check).
 

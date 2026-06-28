@@ -71,6 +71,30 @@ export function validateProfileForm(values: ProfileFormValues): ProfileFieldErro
   return errors;
 }
 
+// --- Skills (B2 gap-interview evidence) ------------------------------------------------------
+// The profile skills editor is a textarea, one skill line per row. These keep the round-trip
+// truthful: parse drops blanks + trims + de-dupes (case-insensitively, keeping first spelling);
+// text re-joins for editing. We store the user's raw surface strings — gap.ts does the lexicon
+// normalization at diff time, so nothing is invented here.
+
+export function parseSkillsInput(text: string): string[] {
+  const seen = new Set<string>();
+  const skills: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const value = line.trim();
+    if (!value) continue;
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    skills.push(value);
+  }
+  return skills;
+}
+
+export function skillsToText(skills: readonly string[] | null | undefined): string {
+  return (skills ?? []).join('\n');
+}
+
 export function baseResumePath(userId: string): string {
   return `${userId}/base-resume.pdf`;
 }

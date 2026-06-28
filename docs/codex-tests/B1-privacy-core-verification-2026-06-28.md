@@ -1,4 +1,4 @@
-# B1 privacy core — pre-flight gate + audit write + RLS (RAN 2026-06-28: 1 BLOCKER)
+# B1 privacy core — server-audit repair deployed; authenticated re-check pending
 
 > **Run status (Codex, 2026-06-28): mostly PASS, one blocking FAIL.**
 > Final `privacy_log` count = 1; denied RLS attempts created no rows.
@@ -17,24 +17,22 @@
 >
 > **Verdicts:** No un-gated egress = **YES**. Every external call logged exactly once = **NO**.
 >
-> **Active B1 blocker (must fix before B2):** the second (already-approved) ping egressed to
+> **Original B1 blocker:** the second (already-approved) ping egressed to
 > OpenRouter but wrote **no** `privacy_log` row. NOTE: the source shows *no* code bypass — both the
 > gated and already-approved paths funnel through `runStream('ping')`, which calls `writePrivacyLog`
 > unconditionally for every ping, and there is no unique constraint on the table. So the missed row
 > is a **failed/dropped client-side insert**, not a skipped call. Root lesson: a best-effort,
 > client-side audit write **cannot guarantee once-per-call** — if the lone insert fails (or the tab
 > navigates/errors after streaming), egress already happened and nothing logs. **Fix direction:**
-> move the audit write **server-side into `/api/llm`** so the row is written atomically once the
-> stream completes (the function already authenticates the user via `getUser`; it can insert with
-> that uid). Keep the pre-flight gate client-side; move only the logging. This also sets up B3's
-> cost-from-`usage` write. Re-run this whole doc after the fix.
+> move the audit write **server-side into `/api/llm`** and fail closed before provider access.
 >
 > **Repair implemented after this run:** auditing now lives in `api/llm.ts`, uses the verified
 > caller JWT for an owner-scoped insert, and runs **before** OpenRouter. An audit failure returns
 > 503 before SSE starts and the provider fetch is never called. The client-side insert was removed,
 > preventing duplicate writers. Regression tests cover audit-before-provider ordering, two rows for
 > two identical same-session Pings, and fail-closed zero-egress behavior. The live re-run below is
-> still required after deployment.
+> still required against deployment `dpl_BnKQ9u2a6F1Naz3ziYEjmodVQHwf` (`Ready`, commit
+> `4f6f6dd`). `/api/health` is OK and unauthenticated Ping still fails 401 before egress.
 
 ---
 
@@ -51,10 +49,12 @@ Prod: `https://job-tracker-sage-two.vercel.app` · screen: `/settings` · signed
   SHA-256; known vector `SHA-256("{}")`), `requiresPreflight` (first-of-type per `(target, action)`
   OR any résumé/contact-bearing call), `buildPrivacyLogRow` (labelled manifests; never the payload).
 - `src/shared/ui/PreflightModal.tsx` — approve-before-send dialog listing SENT vs. NOT-SENT.
-- `src/shared/lib/privacyLog.ts` — `writePrivacyLog` inserts one owner-scoped `privacy_log` row.
-- `SettingsPage` — **Ping** now opens the gate on first use (echo stays ungated, zero egress);
-  on approval it streams, then writes one `privacy_log` row (cost null until B3 wires usage).
-- Gate = **74 tests**, green.
+- `api/llm.ts` — after token verification and before OpenRouter, inserts one owner-scoped audit row
+  with the caller JWT; audit failure returns 503 and performs zero provider fetches.
+- `SettingsPage` — **Ping** opens the gate on first use; the separate client audit writer was
+  removed so the server is the sole writer (echo stays ungated/unlogged because it has zero egress).
+- B1-fix adds repeat-Ping and fail-closed audit regressions; the full working-tree gate was green
+  before deployment.
 
 ## Steps (signed in as owner, on `/settings`)
 1. **Echo is ungated** — click **"Test streaming (free)"**. Expect: tokens stream, **no dialog**,

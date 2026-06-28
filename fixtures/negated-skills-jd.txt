@@ -1,0 +1,7 @@
+Data Analyst
+
+SQL is required for production analytics work.
+Python is not required.
+We are migrating away from Kubernetes.
+Terraform would be nice to have, but it is optional.
+Experience with TS/SCI clearance is required.
