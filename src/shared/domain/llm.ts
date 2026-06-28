@@ -4,6 +4,17 @@
 
 export const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
+// Extract the raw credential from an `Authorization: Bearer <token>` header. Returns null
+// when the header is absent or not a well-formed, non-empty bearer credential. Presence of
+// the bearer prefix is NOT authentication — the returned token must still be verified
+// against Supabase before any paid action runs (see api/llm.ts).
+export function extractBearerToken(authHeader: string | undefined | null): string | null {
+  if (!authHeader) return null;
+  const match = /^bearer[ \t]+(\S.*)$/i.exec(authHeader.trim());
+  const token = match?.[1]?.trim();
+  return token && token.length > 0 ? token : null;
+}
+
 export type ChatRole = 'system' | 'user' | 'assistant';
 export interface ChatMessage {
   role: ChatRole;

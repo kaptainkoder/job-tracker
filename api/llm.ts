@@ -1,7 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { createClient } from '@supabase/supabase-js';
 import {
   OPENROUTER_URL,
   buildOpenRouterBody,
+  extractBearerToken,
   isDone,
   parseOpenRouterDelta,
   sseTokenFrame,
@@ -22,6 +24,45 @@ const ECHO_DEFAULT =
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Dependencies the handler needs from the outside world. Injected so the auth boundary and
+// the action paths are unit-testable without a live Supabase project or a real OpenRouter
+// call (see api/llm.test.ts).
+export interface LlmDeps {
+  /** Resolve a Supabase access token to its user id, or null for any invalid token. */
+  verifyToken: (token: string) => Promise<string | null>;
+  /** The fetch used to reach OpenRouter. Tests assert it is never called on a rejected token. */
+  fetchImpl: typeof fetch;
+}
+
+// Verify a Supabase access token by asking the project's auth server who it belongs to. This
+// validates the JWT signature, expiry, and issuing project server-side — so forged, expired,
+// malformed, and wrong-project tokens all resolve to null. Fails closed (returns null) when
+// the server env is missing or the auth call throws, so a misconfigured deploy never leaks a
+// paid action. Header presence alone is NOT authentication.
+async function verifySupabaseToken(token: string): Promise<string | null> {
+  // Reuse whichever Supabase env the deploy has. getUser(jwt) only needs the project URL + an
+  // apikey (the public anon key is sufficient and is already configured for the browser), so
+  // fall back to the VITE_-prefixed vars — Vercel injects all project env into the function at
+  // runtime. Without this the owner's own valid token would be rejected wherever the dedicated
+  // server vars aren't set.
+  const url = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL;
+  const key =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ??
+    process.env.SUPABASE_ANON_KEY ??
+    process.env.VITE_SUPABASE_ANON_KEY;
+  if (!url || !key) return null;
+  try {
+    const supabase = createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error || !data.user) return null;
+    return data.user.id;
+  } catch {
+    return null;
+  }
+}
+
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
@@ -39,7 +80,15 @@ function safeParse(text: string): unknown {
   }
 }
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default function handler(req: VercelRequest, res: VercelResponse) {
+  return handleLlm(req, res, { verifyToken: verifySupabaseToken, fetchImpl: fetch });
+}
+
+// Testable core. The auth boundary runs BEFORE action dispatch and BEFORE any SSE headers are
+// written, so an unauthenticated caller gets a clean 401 JSON body and never reaches a paid
+// action. This is the fix for the B0 bypass: a forged `Authorization: Bearer <anything>` is
+// no longer accepted — the token must verify against Supabase.
+export async function handleLlm(req: VercelRequest, res: VercelResponse, deps: LlmDeps) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     res.status(405).json({ error: 'Method not allowed' });
@@ -47,11 +96,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // This function holds the OpenRouter secret and can spend money, so it requires the caller
-  // to present their Supabase session token. (Full JWT signature verification is wired in B3
-  // when real per-user egress + cost lands; for now a bearer token must be present.)
-  const auth = req.headers.authorization ?? '';
-  if (!auth.toLowerCase().startsWith('bearer ')) {
+  // to present a VALID Supabase session token. Presence of a bearer prefix is not enough —
+  // the token is verified against the project's auth server before anything is dispatched.
+  const token = extractBearerToken(req.headers.authorization);
+  if (!token) {
     res.status(401).json({ error: 'Missing bearer token' });
+    return;
+  }
+  const userId = await deps.verifyToken(token);
+  if (!userId) {
+    res.status(401).json({ error: 'Invalid or expired session' });
     return;
   }
 
@@ -73,7 +127,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (action === 'echo') {
       await streamEcho(res, asString(body.message) ?? ECHO_DEFAULT);
     } else {
-      await streamPing(res, body);
+      await streamPing(res, body, deps.fetchImpl);
     }
     res.write(SSE_DONE);
   } catch (error) {
@@ -94,14 +148,14 @@ async function streamEcho(res: VercelResponse, message: string) {
 
 // Minimal real OpenRouter streaming call — proves the key + no-log routing work. Kept tiny
 // (one short prompt, 16 max tokens) to respect the small budget.
-async function streamPing(res: VercelResponse, body: Record<string, unknown>) {
+async function streamPing(res: VercelResponse, body: Record<string, unknown>, fetchImpl: typeof fetch) {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) throw new Error('OPENROUTER_API_KEY is not set on the server.');
 
   const model = asString(body.model) ?? 'anthropic/claude-sonnet-4-6';
   const noLog = body.no_log !== false; // default ON (locked privacy posture)
 
-  const upstream = await fetch(OPENROUTER_URL, {
+  const upstream = await fetchImpl(OPENROUTER_URL, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${key}`,
