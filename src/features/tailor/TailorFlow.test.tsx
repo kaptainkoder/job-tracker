@@ -49,12 +49,12 @@ async function waitForText(text: RegExp) {
   assert.match(document.body.textContent ?? '', text);
 }
 
-async function mount() {
+async function mount(onClose: () => void = () => {}) {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<TailorFlow application={APPLICATION} onClose={() => {}} onArtifactSaved={() => {}} />);
+    root.render(<TailorFlow application={APPLICATION} onClose={onClose} onArtifactSaved={() => {}} />);
   });
   await waitForText(/Approve before anything is sent/i);
   return async () => {
@@ -117,6 +117,35 @@ async function main() {
     await act(async () => click('Download PDF'));
     await waitForText(/client-side render/i);
     assert.ok(document.querySelector('iframe[title="A4 résumé preview"]'));
+    await cleanup();
+  });
+
+  await test('Escape closes only the PDF preview and keeps saved Tailor results open', async () => {
+    let flowCloseCount = 0;
+    const cleanup = await mount(() => { flowCloseCount += 1; });
+
+    await act(async () => click('Review privacy & continue'));
+    await act(async () => click('Not in my experience'));
+    await act(async () => click('Generate the kit'));
+    await act(async () => click('Approve & send'));
+    await waitForText(/Cover letter sends a request/);
+    await act(async () => click('Approve & send'));
+    await waitForText(/Interview prep sends a request/);
+    await act(async () => click('Approve & send'));
+    await waitForText(/Your saved tailoring kit/i);
+    await act(async () => click('Download PDF'));
+    await waitForText(/client-side render/i);
+
+    await act(async () => {
+      document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+
+    assert.equal(flowCloseCount, 0, 'Escape from the PDF overlay must not close the Tailor flow');
+    assert.match(document.body.textContent ?? '', /Your saved tailoring kit/i);
+    assert.equal(document.querySelector('[aria-labelledby="pdf-preview-heading"]'), null);
+    await act(async () => click('Download PDF'));
+    await waitForText(/client-side render/i);
+    assert.ok(document.querySelector('iframe[title="A4 résumé preview"]'), 'PDF preview should reopen');
     await cleanup();
   });
 

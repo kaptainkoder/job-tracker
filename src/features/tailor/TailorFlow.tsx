@@ -328,7 +328,7 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
     <>
       <ModalShell
         title={`Tailor · ${application.company}`}
-        onClose={() => pendingAction ? setPendingAction(null) : closeFlow()}
+        onClose={() => pdfOpen ? setPdfOpen(false) : pendingAction ? setPendingAction(null) : closeFlow()}
         contentClassName="max-w-5xl"
       >
         {loading ? (
