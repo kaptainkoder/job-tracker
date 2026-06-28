@@ -33,6 +33,15 @@ for this project.** Everything lives in the project folder:
   verified path to `docs/RUNBOOK.md` so it's never re-derived. (Past: "exactly tell me where".)
 - **Fixtures are the test bar.** For any parsing/matching/data logic, show me the failing
   cases against `fixtures/` first, then fix. (Past: wrong amounts, mis-classified records.)
+- **Hand off un-self-drivable verification — standing rule, don't make me re-ask.** Any test or
+  acceptance check you can't run yourself this session — authenticated / live-data flows, browser
+  or visual checks when no Chrome extension is paired, anything needing a real login, device, or a
+  live LLM you lack — gets staged as a *ready-to-run prompt + the exact desired output format*
+  under `docs/codex-tests/<chunk>-verification.md`, and referenced in the plan, memory, AND
+  checkpoint so Codex (or a browser agent) can run it and report back. Never silently skip it or
+  report it "verified" when you didn't watch it pass. Lead by example: stage it as part of SHIP,
+  unprompted. When a later Codex report contradicts what the code looks like it does, trust the
+  empirical result enough to re-verify in prod — don't dismiss it.
 - **Bundle independent work**; never edit the same file from parallel agents.
 - **Ship is automatic** once the release gate passes (build/tests green): commit + push +
   update memory, no need to ask. Surface anything partial instead of shipping it.
