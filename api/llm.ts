@@ -21,6 +21,7 @@ import {
   type PrivacyCategory,
 } from '../src/shared/domain/privacy.js';
 import { isTailorAction, TAILOR_PRIVACY_ACTION } from '../src/shared/domain/tailor.js';
+import { isParseResumeAction, PARSE_RESUME_PRIVACY_ACTION } from '../src/shared/domain/resumeParse.js';
 
 // The single Wave-B server surface: an action-routed, streaming LLM endpoint. It holds the
 // OpenRouter secret and streams tokens back as SSE (`data: {"token":"..."}`), so generation
@@ -182,8 +183,11 @@ export async function handleLlm(req: VercelRequest, res: VercelResponse, deps: L
   const body = parseBody(req);
   const action = body.action;
   const tailorAction = isTailorAction(action) ? action : null;
-  if (action !== 'echo' && action !== 'ping' && !tailorAction) {
-    res.status(400).json({ error: "Unknown action. Use 'echo', 'ping', 'tailor', 'cover', or 'prep'." });
+  const parseResume = isParseResumeAction(action);
+  if (action !== 'echo' && action !== 'ping' && !tailorAction && !parseResume) {
+    res.status(400).json({
+      error: "Unknown action. Use 'echo', 'ping', 'tailor', 'cover', 'prep', or 'parse-resume'.",
+    });
     return;
   }
 
@@ -223,10 +227,12 @@ export async function handleLlm(req: VercelRequest, res: VercelResponse, deps: L
     auditId = audit.id;
   }
 
-  // tailor / cover / prep: real generation from a client-assembled payload. The messages + manifest
-  // come from the browser (B3 tailor.ts); the hash is computed HERE over the exact body sent, and
-  // the audit row is written BEFORE egress — fail closed (503, zero provider calls) if it can't land.
-  if (tailorAction) {
+  // tailor / cover / prep / parse-resume: real generation from a client-assembled payload. The
+  // messages + manifest come from the browser (tailor.ts / resumeParse.ts); the hash is computed
+  // HERE over the exact body sent, and the audit row is written BEFORE egress — fail closed (503,
+  // zero provider calls) if it can't land. parse-resume is the one-time onboarding extraction: it
+  // returns a full StructuredResume JSON, so it gets a larger token budget than a tailor reword.
+  if (tailorAction || parseResume) {
     if (!process.env.OPENROUTER_API_KEY) {
       res.status(503).json({ error: 'OPENROUTER_API_KEY is not set on the server.' });
       return;
@@ -239,7 +245,7 @@ export async function handleLlm(req: VercelRequest, res: VercelResponse, deps: L
     openRouterBody = buildOpenRouterBody({
       model: parsed.model,
       messages: parsed.messages,
-      maxTokens: 1500,
+      maxTokens: parseResume ? 4000 : 1500,
       noLog: parsed.noLog,
       usage: true,
     });
@@ -247,7 +253,7 @@ export async function handleLlm(req: VercelRequest, res: VercelResponse, deps: L
       userId,
       applicationId: parsed.applicationId,
       target: 'openrouter',
-      action: TAILOR_PRIVACY_ACTION[tailorAction],
+      action: tailorAction ? TAILOR_PRIVACY_ACTION[tailorAction] : PARSE_RESUME_PRIVACY_ACTION,
       model: parsed.model,
       manifest: buildManifest(parsed.categories),
       payloadSha256: await payloadHash(openRouterBody),

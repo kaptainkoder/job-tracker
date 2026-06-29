@@ -6,7 +6,7 @@ import type { PrivacyCategory } from '../domain/privacy';
 // + parsing live in shared/domain/llm.ts (tested) — this file is just transport.
 
 export interface StreamLlmOptions {
-  action: 'echo' | 'ping' | 'tailor' | 'cover' | 'prep';
+  action: 'echo' | 'ping' | 'tailor' | 'cover' | 'prep' | 'parse-resume';
   /** echo only. */
   message?: string;
   model?: string;

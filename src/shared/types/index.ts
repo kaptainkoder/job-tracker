@@ -88,6 +88,20 @@ export interface Artifact {
   created_at: string;
 }
 
+// The structured résumé source of truth (Wave B · B6.3). One row per owner (PK = user_id); mirrors
+// 0006_structured_resume.sql. `content` is a StructuredResume (src/shared/domain/resume.ts) parsed
+// once from the base PDF, reviewed/corrected by the owner, then saved here for the tailor engine to
+// reword/reorder over. confirmed_at is set when the owner saves (vs. a parsed-but-unconfirmed draft).
+export interface ResumeStructuredRecord {
+  user_id: string; // = auth user id (PK)
+  content: import('../domain/resume').StructuredResume;
+  source_filename: string | null; // upload the parse came from, e.g. 'base-resume.pdf'
+  parsed_at: string;
+  confirmed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface UserSettings {
   user_id: string; // = auth user id (PK)
   model: string; // OpenRouter model id, e.g. 'anthropic/claude-sonnet-4-6' (user-swappable)
