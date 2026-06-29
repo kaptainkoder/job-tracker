@@ -34,6 +34,15 @@ import { isParseResumeAction, PARSE_RESUME_PRIVACY_ACTION } from '../src/shared/
 const ECHO_DEFAULT =
   'Streaming is live — tokens arrive progressively, so a long generation finishes without hitting the function timeout.';
 
+const PARSE_RESUME_BODY_KEYS = new Set([
+  'action',
+  'included_categories',
+  'messages',
+  'model',
+  'no_log',
+]);
+const PDF_PAYLOAD_SIGNATURE = /(?:%PDF-|data:application\/pdf|JVBERi0)/i;
+
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Dependencies the handler needs from the outside world. Injected so the auth boundary and
@@ -191,6 +200,20 @@ export async function handleLlm(req: VercelRequest, res: VercelResponse, deps: L
     return;
   }
 
+  if (parseResume) {
+    const transport = validateParseResumeTransport(req, body);
+    if ('error' in transport) {
+      res.status(transport.status).json({ error: transport.error });
+      return;
+    }
+    // Privacy-safe, payload-free proof for the live DevTools check. These headers describe only
+    // transport and shape; no résumé text, URL, hash, or other personal content is logged/echoed.
+    res.setHeader('X-JT-Parse-Transport', 'application/json; text-messages-only');
+    res.setHeader('X-JT-Parse-Body-Keys', transport.bodyKeys.join(','));
+    res.setHeader('X-JT-Parse-Message-Chars', String(transport.messageChars));
+    res.setHeader('X-JT-Parse-PDF-Bytes', 'absent');
+  }
+
   // The exact OpenRouter request body for a paid streaming action, assembled before egress so its
   // hash can be audited. Null for the free echo action. `auditId` lets the cost be backfilled later.
   let openRouterBody: Record<string, unknown> | null = null;
@@ -290,6 +313,44 @@ export async function handleLlm(req: VercelRequest, res: VercelResponse, deps: L
   } finally {
     res.end();
   }
+}
+
+interface ParseResumeTransportProof {
+  bodyKeys: string[];
+  messageChars: number;
+}
+
+function requestHeader(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? value.join(',') : value ?? '';
+}
+
+function validateParseResumeTransport(
+  req: VercelRequest,
+  body: Record<string, unknown>,
+): ParseResumeTransportProof | { error: string; status: 400 | 415 } {
+  const contentType = requestHeader(req.headers['content-type']).toLowerCase();
+  if (!contentType.startsWith('application/json')) {
+    return { error: 'parse-resume accepts application/json extracted text only.', status: 415 };
+  }
+
+  const bodyKeys = Object.keys(body).sort();
+  const unexpected = bodyKeys.filter((key) => !PARSE_RESUME_BODY_KEYS.has(key));
+  if (unexpected.length > 0) {
+    return { error: `parse-resume contains unsupported fields: ${unexpected.join(', ')}.`, status: 400 };
+  }
+
+  const messages = parseMessages(body.messages);
+  if (!messages || messages.length === 0) {
+    return { error: 'parse-resume requires non-empty text messages.', status: 400 };
+  }
+  if (messages.some((message) => PDF_PAYLOAD_SIGNATURE.test(message.content))) {
+    return { error: 'parse-resume rejected PDF/base64 data; send extracted text only.', status: 400 };
+  }
+
+  return {
+    bodyKeys,
+    messageChars: messages.reduce((total, message) => total + message.content.length, 0),
+  };
 }
 
 interface ParsedTailor {

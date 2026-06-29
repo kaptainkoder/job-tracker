@@ -7,10 +7,17 @@
 // needs a worker to parse off the main thread. We import the lib lazily inside the function so the
 // large pdf.js bundle is only fetched when a résumé is actually parsed.
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import {
+  PDF_LINK_REVIEW_WARNING,
+  appendPdfLinkAnnotations,
+  extractSafePdfLinkUrls,
+} from './resumePdfLinks';
 
 export interface ExtractedPdfText {
   text: string;
   pageCount: number;
+  linkUrls: string[];
+  warnings: string[];
 }
 
 // Extract text from a PDF's bytes. Joins page text with blank lines and collapses runs of spaces so
@@ -24,6 +31,8 @@ export async function extractPdfText(data: ArrayBuffer): Promise<ExtractedPdfTex
   const pdf = await pdfjs.getDocument({ data: data.slice(0) }).promise;
   try {
     const pages: string[] = [];
+    const linkUrls = new Set<string>();
+    let annotationReadFailed = false;
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
       const page = await pdf.getPage(pageNumber);
       const content = await page.getTextContent();
@@ -33,8 +42,23 @@ export async function extractPdfText(data: ArrayBuffer): Promise<ExtractedPdfTex
         .replace(/[ \t]+/g, ' ')
         .trim();
       if (line) pages.push(line);
+
+      try {
+        const annotations = await page.getAnnotations({ intent: 'display' });
+        for (const url of extractSafePdfLinkUrls(annotations)) linkUrls.add(url);
+      } catch {
+        // Text extraction is still useful. Surface the annotation gap explicitly in the review UI
+        // instead of silently pretending contact/profile links were recovered.
+        annotationReadFailed = true;
+      }
     }
-    return { text: pages.join('\n\n').trim(), pageCount: pdf.numPages };
+    const urls = [...linkUrls];
+    return {
+      text: appendPdfLinkAnnotations(pages.join('\n\n'), urls),
+      pageCount: pdf.numPages,
+      linkUrls: urls,
+      warnings: annotationReadFailed ? [PDF_LINK_REVIEW_WARNING] : [],
+    };
   } finally {
     await pdf.destroy();
   }

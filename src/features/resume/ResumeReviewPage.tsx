@@ -74,6 +74,7 @@ export default function ResumeReviewPage() {
   const [parsing, setParsing] = useState(false);
   const [parseStatus, setParseStatus] = useState<string | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
+  const [parseWarnings, setParseWarnings] = useState<string[]>([]);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -124,10 +125,11 @@ export default function ResumeReviewPage() {
     if (!user) return;
     setParsing(true);
     setParseError(null);
+    setParseWarnings([]);
     setSaveSuccess(null);
     setParseStatus('Reading your résumé…');
     try {
-      const { text } = await extractPdfText(bytes);
+      const { text, warnings } = await extractPdfText(bytes);
       if (!text.trim()) {
         throw new Error('No selectable text found in that PDF — it may be a scan. Try a text-based PDF.');
       }
@@ -149,6 +151,7 @@ export default function ResumeReviewPage() {
       setResume(parsed);
       setSourceFilename(filename);
       setPendingParse(true);
+      setParseWarnings(warnings);
       setDirty(false);
       setExpanded({});
       setParseStatus(null);
@@ -176,6 +179,7 @@ export default function ResumeReviewPage() {
   async function handleParseBaseResume() {
     if (!user) return;
     setParseError(null);
+    setParseWarnings([]);
     setParseStatus('Fetching your base résumé…');
     const { data, error } = await downloadBaseResume(baseResumePath(user.id));
     if (error || !data) {
@@ -214,6 +218,7 @@ export default function ResumeReviewPage() {
     setEditKey(null);
     setExpanded({});
     setParseError(null);
+    setParseWarnings([]);
     setSaveSuccess(null);
   }
 
@@ -275,6 +280,11 @@ export default function ResumeReviewPage() {
               is invented — only what your résumé says. Nothing is saved until you choose{' '}
               <span className="font-medium text-ink">Save résumé</span>.
             </p>
+            {parseWarnings.map((warning) => (
+              <p key={warning} className="mt-2 font-medium text-stage-interviewing" role="alert">
+                {warning}
+              </p>
+            ))}
           </div>
         </div>
       ) : (
@@ -309,13 +319,9 @@ export default function ResumeReviewPage() {
       <Section
         heading="Experience"
         action="+ Add"
-        onAction={() => {
-          const index = resume.experience.length;
-          mutate({ ...resume, experience: [...resume.experience, blankExperience()] });
-          setEditKey(`experience:${index}`);
-        }}
+        onAction={() => setEditKey('experience:new')}
       >
-        {resume.experience.length === 0 && editKey !== 'experience:0' ? (
+        {resume.experience.length === 0 && editKey !== 'experience:new' ? (
           <Empty>No experience yet.</Empty>
         ) : (
           <div className="space-y-3">
@@ -349,6 +355,16 @@ export default function ResumeReviewPage() {
                 />
               ),
             )}
+            {editKey === 'experience:new' && (
+              <ExperienceEditor
+                value={blankExperience()}
+                onCancel={() => setEditKey(null)}
+                onSave={(next) => {
+                  mutate({ ...resume, experience: [...resume.experience, next] });
+                  setEditKey(null);
+                }}
+              />
+            )}
           </div>
         )}
       </Section>
@@ -357,13 +373,9 @@ export default function ResumeReviewPage() {
       <Section
         heading="Education"
         action="+ Add"
-        onAction={() => {
-          const index = resume.education.length;
-          mutate({ ...resume, education: [...resume.education, blankEducation()] });
-          setEditKey(`education:${index}`);
-        }}
+        onAction={() => setEditKey('education:new')}
       >
-        {resume.education.length === 0 && editKey !== 'education:0' ? (
+        {resume.education.length === 0 && editKey !== 'education:new' ? (
           <Empty>No education yet.</Empty>
         ) : (
           <div className="space-y-3">
@@ -400,6 +412,16 @@ export default function ResumeReviewPage() {
                 />
               ),
             )}
+            {editKey === 'education:new' && (
+              <EducationEditor
+                value={blankEducation()}
+                onCancel={() => setEditKey(null)}
+                onSave={(next) => {
+                  mutate({ ...resume, education: [...resume.education, next] });
+                  setEditKey(null);
+                }}
+              />
+            )}
           </div>
         )}
       </Section>
@@ -424,13 +446,9 @@ export default function ResumeReviewPage() {
       <Section
         heading="Honors & awards"
         action="+ Add"
-        onAction={() => {
-          const index = resume.awards.length;
-          mutate({ ...resume, awards: [...resume.awards, { title: '' }] });
-          setEditKey(`awards:${index}`);
-        }}
+        onAction={() => setEditKey('awards:new')}
       >
-        {resume.awards.length === 0 && editKey !== 'awards:0' ? (
+        {resume.awards.length === 0 && editKey !== 'awards:new' ? (
           <Empty>No honors or awards yet.</Empty>
         ) : (
           <div className="space-y-3">
@@ -459,6 +477,16 @@ export default function ResumeReviewPage() {
                 />
               ),
             )}
+            {editKey === 'awards:new' && (
+              <AwardEditor
+                value={{ title: '' }}
+                onCancel={() => setEditKey(null)}
+                onSave={(next) => {
+                  mutate({ ...resume, awards: [...resume.awards, next] });
+                  setEditKey(null);
+                }}
+              />
+            )}
           </div>
         )}
       </Section>
@@ -467,13 +495,9 @@ export default function ResumeReviewPage() {
       <Section
         heading="Projects"
         action="+ Add"
-        onAction={() => {
-          const index = resume.projects.length;
-          mutate({ ...resume, projects: [...resume.projects, blankProject()] });
-          setEditKey(`projects:${index}`);
-        }}
+        onAction={() => setEditKey('projects:new')}
       >
-        {resume.projects.length === 0 && editKey !== 'projects:0' ? (
+        {resume.projects.length === 0 && editKey !== 'projects:new' ? (
           <Empty>No projects yet.</Empty>
         ) : (
           <div className="space-y-3">
@@ -504,6 +528,16 @@ export default function ResumeReviewPage() {
                   onEdit={() => setEditKey(`projects:${index}`)}
                 />
               ),
+            )}
+            {editKey === 'projects:new' && (
+              <ProjectEditor
+                value={blankProject()}
+                onCancel={() => setEditKey(null)}
+                onSave={(next) => {
+                  mutate({ ...resume, projects: [...resume.projects, next] });
+                  setEditKey(null);
+                }}
+              />
             )}
           </div>
         )}
@@ -722,7 +756,7 @@ function Header({
   if (editing) {
     return <ContactEditor value={contact} onCancel={onCancel} onSave={onSave} />;
   }
-  const meta = metaLine([contact.location, contact.email, contact.phone, ...contact.links.map((l) => l.label)]);
+  const meta = metaLine([contact.location, contact.email, contact.phone]);
   return (
     <div>
       <p className="text-2xs font-semibold uppercase tracking-[0.16em] text-accent">Résumé · source of truth</p>
@@ -730,12 +764,42 @@ function Header({
         <div>
           <h1 className="text-h1 font-semibold text-ink">{contact.fullName || 'Your résumé'}</h1>
           {contact.title && <p className="mt-0.5 text-sm text-ink-soft">{contact.title}</p>}
-          {meta && <p className="mt-1 text-sm text-ink-faint">{meta}</p>}
+          {(meta || contact.links.length > 0) && (
+            <p className="mt-1 text-sm text-ink-faint">
+              {meta}
+              {meta && contact.links.length > 0 ? META_SEP : null}
+              {contact.links.map((link, index) => {
+                const href = safeExternalHref(link.url);
+                return (
+                  <span key={`${link.label}-${index}`}>
+                    {index > 0 ? META_SEP : null}
+                    {href ? (
+                      <a className="font-medium text-accent hover:underline" href={href} target="_blank" rel="noreferrer">
+                        {link.label}
+                      </a>
+                    ) : (
+                      link.label
+                    )}
+                  </span>
+                );
+              })}
+            </p>
+          )}
         </div>
         <PencilButton onClick={onEdit} label="Edit contact details" />
       </div>
     </div>
   );
+}
+
+function safeExternalHref(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.href : null;
+  } catch {
+    return null;
+  }
 }
 
 // --- Editors ------------------------------------------------------------------------------------
@@ -831,9 +895,27 @@ function ContactEditor({
   onSave: (v: StructuredResume['contact']) => void;
 }) {
   const [draft, setDraft] = useState(value);
+  const [linksText, setLinksText] = useState(
+    value.links.map((link) => [link.label, link.url].filter(Boolean).join(' | ')).join('\n'),
+  );
   const set = (patch: Partial<StructuredResume['contact']>) => setDraft((d) => ({ ...d, ...patch }));
   return (
-    <EditorShell onCancel={onCancel} onSave={() => onSave(draft)}>
+    <EditorShell
+      onCancel={onCancel}
+      onSave={() =>
+        onSave({
+          ...draft,
+          links: linksText
+            .split(/\r?\n/)
+            .map((line) => {
+              const [label = '', ...urlParts] = line.split('|');
+              const url = urlParts.join('|').trim();
+              return { label: label.trim(), ...(url ? { url } : {}) };
+            })
+            .filter((link) => link.label.length > 0),
+        })
+      }
+    >
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Full name" value={draft.fullName} onChange={(v) => set({ fullName: v })} />
         <Field label="Headline / title" value={draft.title} onChange={(v) => set({ title: v })} />
@@ -841,6 +923,16 @@ function ContactEditor({
         <Field label="Phone" value={draft.phone ?? ''} onChange={(v) => set({ phone: v })} />
         <Field label="Location" value={draft.location ?? ''} onChange={(v) => set({ location: v })} />
       </div>
+      <label className="block">
+        <span className="text-xs font-medium text-ink-soft">Links — one per line as Label | URL</span>
+        <textarea
+          className="input mt-1 resize-y"
+          rows={3}
+          value={linksText}
+          onChange={(event) => setLinksText(event.target.value)}
+          placeholder="LinkedIn | https://www.linkedin.com/in/your-profile"
+        />
+      </label>
     </EditorShell>
   );
 }
@@ -861,7 +953,7 @@ function ExperienceEditor({
   value: ResumeExperience;
   onCancel: () => void;
   onSave: (v: ResumeExperience) => void;
-  onDelete: () => void;
+  onDelete?: () => void;
 }) {
   const [draft, setDraft] = useState(value);
   const [bulletText, setBulletText] = useState(bulletsToText(value.bullets));
@@ -903,7 +995,7 @@ function EducationEditor({
   value: ResumeEducation;
   onCancel: () => void;
   onSave: (v: ResumeEducation) => void;
-  onDelete: () => void;
+  onDelete?: () => void;
 }) {
   const [draft, setDraft] = useState(value);
   const set = (patch: Partial<ResumeEducation>) => setDraft((d) => ({ ...d, ...patch }));
@@ -930,7 +1022,7 @@ function AwardEditor({
   value: ResumeAward;
   onCancel: () => void;
   onSave: (v: ResumeAward) => void;
-  onDelete: () => void;
+  onDelete?: () => void;
 }) {
   const [draft, setDraft] = useState(value);
   return (
@@ -950,7 +1042,7 @@ function ProjectEditor({
   value: ResumeProject;
   onCancel: () => void;
   onSave: (v: ResumeProject) => void;
-  onDelete: () => void;
+  onDelete?: () => void;
 }) {
   const [draft, setDraft] = useState(value);
   const [bulletText, setBulletText] = useState(bulletsToText(value.bullets));

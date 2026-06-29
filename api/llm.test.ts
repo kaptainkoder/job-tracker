@@ -55,10 +55,13 @@ function mockRes(): MockRes {
   return res;
 }
 
-function mockReq(authHeader: string | undefined, body: unknown) {
+function mockReq(authHeader: string | undefined, body: unknown, headers: Record<string, string> = {}) {
   return {
     method: 'POST',
-    headers: authHeader === undefined ? {} : { authorization: authHeader },
+    headers: {
+      ...headers,
+      ...(authHeader === undefined ? {} : { authorization: authHeader }),
+    },
     body,
   } as never;
 }
@@ -389,3 +392,92 @@ test('tailor: malformed payload (no messages) is 400 — before any audit or egr
   assert.equal(auditCalls, 0, 'no audit row for a malformed request');
   assert.equal(fetchSpy.calls, 0, 'no egress for a malformed request');
 });
+
+// --- B6.3 live finding: parse-resume transport proof ---------------------------------------
+
+const PARSE_BODY = {
+  action: 'parse-resume',
+  model: 'anthropic/claude-sonnet-4-6',
+  no_log: true,
+  included_categories: ['resume', 'contact-info', 'profile-summary', 'work-history', 'skills', 'education'],
+  messages: [
+    { role: 'system', content: 'Extract only confirmed résumé facts into JSON.' },
+    { role: 'user', content: 'Karan Mahajan\nLinkedIn\nhttps://www.linkedin.com/in/karan-example' },
+  ],
+};
+
+test('parse-resume: valid JSON text gets payload-free proof headers and one audited egress', async () => {
+  process.env.OPENROUTER_API_KEY = 'test-key';
+  let providerCalls = 0;
+  let auditCalls = 0;
+  const res = mockRes();
+  await handleLlm(
+    mockReq('Bearer good-token', PARSE_BODY, { 'content-type': 'application/json' }),
+    res as never,
+    deps({
+      verifyToken: async () => VALID_USER,
+      fetchImpl: tailorProviderFetch(() => { providerCalls += 1; }),
+      writeAudit: async () => {
+        auditCalls += 1;
+        return { ok: true, error: null, id: 'audit-parse' };
+      },
+    }),
+  );
+
+  assert.equal(providerCalls, 1);
+  assert.equal(auditCalls, 1);
+  assert.equal(res.headers['x-jt-parse-transport'], 'application/json; text-messages-only');
+  assert.equal(res.headers['x-jt-parse-pdf-bytes'], 'absent');
+  assert.equal(
+    res.headers['x-jt-parse-body-keys'],
+    'action,included_categories,messages,model,no_log',
+  );
+  assert.equal(
+    res.headers['x-jt-parse-message-chars'],
+    String(PARSE_BODY.messages.reduce((sum, message) => sum + message.content.length, 0)),
+  );
+});
+
+for (const rejected of [
+  {
+    name: 'multipart content type',
+    body: PARSE_BODY,
+    contentType: 'multipart/form-data; boundary=pdf-upload',
+    status: 415,
+  },
+  {
+    name: 'raw PDF field',
+    body: { ...PARSE_BODY, pdf: '%PDF-1.7' },
+    contentType: 'application/json',
+    status: 400,
+  },
+  {
+    name: 'base64 PDF signature inside a message',
+    body: { ...PARSE_BODY, messages: [{ role: 'user', content: 'JVBERi0xLjQKJ...' }] },
+    contentType: 'application/json',
+    status: 400,
+  },
+] as const) {
+  test(`parse-resume: rejects ${rejected.name} before audit or provider egress`, async () => {
+    process.env.OPENROUTER_API_KEY = 'test-key';
+    const fetchSpy = spyFetch();
+    let auditCalls = 0;
+    const res = mockRes();
+    await handleLlm(
+      mockReq('Bearer good-token', rejected.body, { 'content-type': rejected.contentType }),
+      res as never,
+      deps({
+        verifyToken: async () => VALID_USER,
+        fetchImpl: fetchSpy.impl,
+        writeAudit: async () => {
+          auditCalls += 1;
+          return { ok: true, error: null, id: 'must-not-exist' };
+        },
+      }),
+    );
+
+    assert.equal(res.statusCode, rejected.status);
+    assert.equal(auditCalls, 0, 'rejected transport must not write an audit row');
+    assert.equal(fetchSpy.calls, 0, 'rejected transport must not reach OpenRouter');
+  });
+}

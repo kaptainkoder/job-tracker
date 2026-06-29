@@ -28,6 +28,9 @@ const stubPlugin = {
     build.onResolve({ filter: /[\\/]shared[\\/]lib[\\/]llmClient$/ }, () => ({
       path: path.resolve(root, 'test/stubs/llmClient.ts'),
     }));
+    build.onResolve({ filter: /resumePdfText$/ }, () => ({
+      path: path.resolve(root, 'test/stubs/resumePdfText.ts'),
+    }));
   },
 };
 
