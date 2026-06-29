@@ -42,6 +42,17 @@ export async function streamLlm(opts: StreamLlmOptions): Promise<void> {
     signal: opts.signal,
   });
 
+  if (opts.action === 'parse-resume') {
+    // Production-safe instrumentation for B6.3's live privacy proof. This intentionally records
+    // only server-asserted transport/shape metadata — never message text, URLs, hashes, or tokens.
+    console.info('Job Tracker parse transport proof (no résumé content)', {
+      transport: response.headers.get('x-jt-parse-transport'),
+      bodyKeys: response.headers.get('x-jt-parse-body-keys'),
+      messageChars: response.headers.get('x-jt-parse-message-chars'),
+      pdfBytes: response.headers.get('x-jt-parse-pdf-bytes'),
+    });
+  }
+
   if (!response.ok || !response.body) {
     const detail = await response.text().catch(() => '');
     throw new Error(detail || `Request failed (${response.status}).`);
