@@ -133,7 +133,27 @@ Gotcha: free projects pause after ~7 days idle — first load after a quiet week
 3. **Verify:** `vercel env ls` shows `OPENROUTER_API_KEY` for Development + Production (Encrypted).
    Confirmed 2026-06-28. End-to-end stream check is staged in
    `docs/codex-tests/B0/B0-settings-verification.md` (echo = free; ping = a few tokens).
-Last verified: 2026-06-28.
+4. **Prove a résumé parse sends extracted JSON text only:** Chrome → **View → Developer → Developer
+   Tools** → **Network** → enable **Preserve log** → **Clear** → filter `llm` → app sidebar
+   **Résumé** → **Discard** (only clears the current browser review; it does not delete the saved DB
+   row) → **Use my base résumé**. Select the single `llm` request:
+   - **Headers → Request Headers:** `content-type: application/json`.
+   - **Payload:** top-level keys are exactly `action`, `included_categories`, `messages`, `model`,
+     `no_log`; `action = parse-resume`; `messages[*].content` is readable extracted text plus any
+     `PDF link annotations` URL lines. Confirm there is no `pdf`, `file`, `bytes`, `base64`, Blob,
+     multipart field, `%PDF-`, or `JVBERi0` signature.
+   - **Headers → Response Headers:** confirm `x-jt-parse-transport: application/json;
+     text-messages-only`, `x-jt-parse-body-keys: action,included_categories,messages,model,no_log`,
+     numeric `x-jt-parse-message-chars`, and `x-jt-parse-pdf-bytes: absent`.
+   - **Console fallback:** filter `Job Tracker parse transport proof`; it echoes only those four
+     safe metadata values—never résumé text, URLs, hashes, or auth tokens.
+   - **Finish cleanly:** if the review is correct, **Save résumé**; otherwise reload to restore the
+     prior saved owner row. The server rejects multipart (415), extra PDF fields (400), and
+     PDF/base64 signatures (400) before privacy audit or provider egress.
+   Verified 2026-06-29 on production deployment `dpl_3qqFXCGsh9oiTDkg5duwESNRx3V8`: real parse
+   completed, safe proof marker appeared, LinkedIn annotation was recovered, and the corrected row
+   saved/reloaded cleanly.
+Last verified: 2026-06-29.
 
 ## OAuth / external integrations
 _TODO — consent screen, redirect URIs, scopes._
