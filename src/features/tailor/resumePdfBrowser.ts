@@ -1,6 +1,12 @@
 import interFontUrl from '../../assets/InterVariable.ttf?url';
 import type { ResumeDocument } from './resumeDocument';
-import { downloadResumePdf, resumePdfBytes } from './resumePdf';
+import type { StructuredResume } from '../../shared/domain/resume';
+import {
+  downloadResumePdf,
+  downloadStructuredResumePdf,
+  resumePdfBytes,
+  structuredResumePdfBytes,
+} from './resumePdf';
 
 let interFontPromise: Promise<string> | null = null;
 
@@ -29,4 +35,17 @@ export async function browserResumePdfBytes(document: ResumeDocument): Promise<U
 
 export async function downloadBrowserResumePdf(document: ResumeDocument, filename: string): Promise<void> {
   downloadResumePdf(document, filename, await loadInterFontBase64());
+}
+
+// Structured path (Wave B · B6.4). The deterministic StructuredResume renderer + the in-app HTML
+// preview consume the same StructuredResume, so download and preview never drift.
+export async function browserStructuredResumePdfBytes(resume: StructuredResume): Promise<Uint8Array> {
+  return structuredResumePdfBytes(resume, await loadInterFontBase64());
+}
+
+export async function downloadBrowserStructuredResumePdf(
+  resume: StructuredResume,
+  role: string | null | undefined,
+): Promise<void> {
+  downloadStructuredResumePdf(resume, role, await loadInterFontBase64());
 }

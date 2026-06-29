@@ -28,6 +28,34 @@ globalThis.__SUPABASE_ROWS__ = {
   },
   artifacts: [],
   outcomes: [],
+  // A confirmed structured résumé so the tailor action runs the structured path (Wave B · B6.4).
+  // Tests that want the "no résumé saved" gate set this to null before mounting.
+  resume_structured: {
+    user_id: 'user-1',
+    content: {
+      contact: { fullName: 'Karan', title: 'Data engineer', links: [] },
+      summary: 'Builds reliable data pipelines.',
+      awards: [],
+      experience: [
+        {
+          org: 'Example Co',
+          location: 'Remote',
+          title: 'Data engineer',
+          start: '2023',
+          end: 'Present',
+          bullets: ['Built SQL pipelines that cut report latency.'],
+        },
+      ],
+      projects: [],
+      education: [],
+      skills: [{ items: ['SQL'] }],
+    },
+    source_filename: 'base-resume.pdf',
+    parsed_at: '2026-06-20T00:00:00Z',
+    confirmed_at: '2026-06-20T00:00:00Z',
+    created_at: '2026-06-20T00:00:00Z',
+    updated_at: '2026-06-20T00:00:00Z',
+  },
 };
 
 function makeBuilder(table) {

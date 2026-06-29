@@ -19,6 +19,8 @@ import {
 } from '../../shared/domain/gap';
 import {
   buildTailorMessages,
+  buildTailorResumeMessages,
+  tailorStructuredResume,
   TAILOR_ACTIONS,
   TAILOR_ACTION_LABEL,
   TAILOR_PRIVACY_ACTION,
@@ -26,6 +28,12 @@ import {
   type TailorAction,
   type TailorContext,
 } from '../../shared/domain/tailor';
+import {
+  buildStructuredResumeDocument,
+  flattenResumeText,
+  type StructuredResume,
+} from '../../shared/domain/resume';
+import { loadStructuredResume } from '../resume/resumeStore';
 import {
   buildManifest,
   preflightKey,
@@ -41,9 +49,8 @@ import PreflightModal from '../../shared/ui/PreflightModal';
 import { useAuth } from '../auth/AuthProvider';
 import { ModalShell } from '../tracker/ApplicationForm';
 import { DEFAULT_SETTINGS_FORM, modelLabel, settingsToForm } from '../settings/settings';
-import ResumePdfPreview from './ResumePdfPreview';
+import StructuredResumePreview from './StructuredResumePreview';
 import { insertTailorArtifact } from './tailorArtifacts';
-import { buildResumeDocument } from './resumeDocument';
 
 interface TailorFlowProps {
   application: Application;
@@ -111,6 +118,12 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
   const { user, session } = useAuth();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS_FORM);
+  // The confirmed structured résumé (B6.3) — the truthful source the tailor action rewords. Null
+  // means onboarding isn't done yet, which gates the résumé action (B6.4 AC#2).
+  const [structuredResume, setStructuredResume] = useState<StructuredResume | null>(null);
+  // The applied tailored StructuredResume for THIS run — drives the preview + download + the JSON
+  // persisted in the artifact, so preview == download (B6.4 AC#3/#4).
+  const [tailoredResume, setTailoredResume] = useState<StructuredResume | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [stage, setStage] = useState<FlowStage>('privacy');
@@ -138,7 +151,8 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
     void Promise.all([
       supabase.from('profile').select('*').eq('id', user.id).maybeSingle(),
       supabase.from('user_settings').select('*').eq('user_id', user.id).maybeSingle(),
-    ]).then(([profileResult, settingsResult]) => {
+      loadStructuredResume(user.id),
+    ]).then(([profileResult, settingsResult, resumeResult]) => {
       if (!active) return;
       if (profileResult.error) {
         setLoadError(`Could not load your profile. ${profileResult.error.message}`);
@@ -149,6 +163,11 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
       } else {
         setProfile(profileResult.data as Profile);
         setSettings(settingsToForm(settingsResult.data as UserSettings | null));
+        // A confirmed structured résumé is the source for the tailor action. A missing one is not a
+        // fatal error (cover/prep still run) — it just gates the résumé tab.
+        setStructuredResume(
+          resumeResult.record?.confirmed_at ? resumeResult.record.content : null,
+        );
       }
       setLoading(false);
     });
@@ -157,6 +176,8 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
       abortRef.current?.abort();
     };
   }, [user]);
+
+  const resumeReady = structuredResume !== null;
 
   const gap = useMemo(
     () => computeGap({ jdText: application.jd_text ?? '', evidence: profile?.skills ?? [] }),
@@ -188,7 +209,9 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
     })));
     setResolutions(folded);
     setStage('generating');
-    requestAction('tailor', folded);
+    // The résumé action only runs when a confirmed structured résumé exists; otherwise the chain
+    // starts at the cover letter and the résumé tab shows a "set up your résumé" guide (B6.4 AC#2).
+    requestAction(resumeReady ? 'tailor' : 'cover', folded);
   }
 
   function contextFor(action: TailorAction, folded = resolutions): TailorContext | null {
@@ -239,6 +262,10 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
   async function runAction(action: TailorAction, folded = resolutions) {
     const context = contextFor(action, folded);
     if (!context || !user) return;
+    // The résumé action runs the STRUCTURED path (B6.4): the model returns a JSON reword/reorder
+    // patch over the confirmed structured résumé, never free prose. cover/prep keep the prose path.
+    const structuredTailor = action === 'tailor';
+    if (structuredTailor && !structuredResume) return;
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
@@ -253,22 +280,44 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
         action,
         model: settings.model,
         noLog: settings.no_log,
-        messages: buildTailorMessages(context),
+        messages: structuredTailor
+          ? buildTailorResumeMessages({
+              company: application.company,
+              role: application.role,
+              jdText: application.jd_text ?? '',
+              resume: structuredResume as StructuredResume,
+            })
+          : buildTailorMessages(context),
         includedCategories: tailorIncludedCategories(context),
         applicationId: application.id,
         accessToken: session?.access_token ?? null,
         signal: controller.signal,
         onToken: (token) => {
           content += token;
-          setOutputs((current) => ({ ...current, [action]: content }));
+          // Free prose streams live; the structured patch is JSON, so we render only the applied
+          // result once the stream completes (no raw JSON shown to the user).
+          if (!structuredTailor) setOutputs((current) => ({ ...current, [action]: content }));
         },
       });
       if (!content.trim()) throw new Error('The model returned an empty document.');
+
+      // For the résumé action, re-stitch the patch onto the source (the truthfulness guard lives in
+      // tailorStructuredResume) → persist the applied StructuredResume as JSON so it re-renders
+      // deterministically; show the flattened, readable résumé text in the panel + Copy.
+      let persistContent = content;
+      if (structuredTailor) {
+        const tailored = tailorStructuredResume(structuredResume as StructuredResume, content);
+        setTailoredResume(tailored);
+        persistContent = JSON.stringify(tailored);
+        const readable = flattenResumeText(buildStructuredResumeDocument(tailored)).join('\n');
+        setOutputs((current) => ({ ...current, [action]: readable }));
+      }
+
       const artifact = await insertTailorArtifact({
         userId: user.id,
         applicationId: application.id,
         action,
-        content,
+        content: persistContent,
         model: settings.model,
       });
       onArtifactSaved(artifact);
@@ -279,7 +328,7 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
       if (next) {
         requestAction(next, folded);
       } else {
-        setActiveTab('tailor');
+        setActiveTab(resumeReady ? 'tailor' : 'cover');
         setStage('results');
       }
     } catch (error) {
@@ -317,12 +366,6 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
     : buildManifest([]);
   const streaming = TAILOR_ACTIONS.some((action) => statuses[action] === 'streaming');
   const activeStep = FLOW_STEPS.findIndex((step) => step.stage === stage);
-  const resumeDocument = useMemo(
-    () => profile && outputs.tailor
-      ? buildResumeDocument({ content: outputs.tailor, profile, application })
-      : null,
-    [application, outputs.tailor, profile],
-  );
 
   return (
     <>
@@ -449,12 +492,15 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
                     : 'The stricter privacy rule wins: each required call gets its own exact manifest review before it leaves.'}
                 </p>
                 <ol className="mx-auto mt-6 grid max-w-2xl gap-2 text-left sm:grid-cols-3" aria-label="Generation status">
-                  {TAILOR_ACTIONS.map((action) => (
-                    <li key={action} className={`rounded-xl border p-3 ${currentAction === action ? 'border-accent/40 bg-accent-soft' : 'border-line-soft bg-surface-2/50'}`}>
-                      <p className="text-sm font-semibold text-ink">{TAILOR_ACTION_LABEL[action]}</p>
-                      <p className="mt-0.5 text-xs text-ink-soft">{ACTION_STATUS_LABEL[statuses[action]]}</p>
-                    </li>
-                  ))}
+                  {TAILOR_ACTIONS.map((action) => {
+                    const skipped = action === 'tailor' && !resumeReady;
+                    return (
+                      <li key={action} className={`rounded-xl border p-3 ${currentAction === action ? 'border-accent/40 bg-accent-soft' : 'border-line-soft bg-surface-2/50'}`}>
+                        <p className="text-sm font-semibold text-ink">{TAILOR_ACTION_LABEL[action]}</p>
+                        <p className="mt-0.5 text-xs text-ink-soft">{skipped ? 'Skipped · no résumé saved' : ACTION_STATUS_LABEL[statuses[action]]}</p>
+                      </li>
+                    );
+                  })}
                 </ol>
                 <div className="mx-auto mt-6 max-w-xl space-y-2" aria-hidden="true">
                   <span className="block h-2.5 w-full animate-pulse rounded-full bg-surface-2" />
@@ -491,18 +537,28 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
                     ))}
                   </div>
                   <div className="flex gap-2">
-                    <Button variant="secondary" size="sm" onClick={() => void copyActiveOutput()}><Copy className="h-3.5 w-3.5" /> Copy</Button>
-                    <Button size="sm" disabled={!resumeDocument} onClick={() => { setActiveTab('tailor'); setPdfOpen(true); }}><Download className="h-3.5 w-3.5" /> Download PDF</Button>
+                    <Button variant="secondary" size="sm" disabled={!outputs[activeTab]} onClick={() => void copyActiveOutput()}><Copy className="h-3.5 w-3.5" /> Copy</Button>
+                    <Button size="sm" disabled={!tailoredResume} onClick={() => { setActiveTab('tailor'); setPdfOpen(true); }}><Download className="h-3.5 w-3.5" /> Download PDF</Button>
                   </div>
                 </div>
 
-                <div className="mt-3 rounded-xl border border-line bg-surface p-5 shadow-card" role="tabpanel" aria-label={`${TAILOR_ACTION_LABEL[activeTab]} result`}>
-                  <div className="mb-3 flex items-center justify-between gap-3 border-b border-line-soft pb-3">
-                    <h4 className="font-semibold text-ink">{TAILOR_ACTION_LABEL[activeTab]}</h4>
-                    <span className="inline-flex items-center gap-1.5 text-xs text-stage-offer"><FileCheck2 className="h-3.5 w-3.5" /> Saved</span>
+                {activeTab === 'tailor' && !resumeReady ? (
+                  <div className="mt-3 rounded-xl border border-line bg-surface p-5 shadow-card" role="tabpanel" aria-label="Tailored résumé result">
+                    <h4 className="font-semibold text-ink">Set up your résumé first</h4>
+                    <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-soft">
+                      The tailored résumé rewords your confirmed structured résumé toward this role—truthfully, never inventing anything. You haven&apos;t saved one yet, so nothing was sent for the résumé. Your cover letter and interview prep are ready in the other tabs.
+                    </p>
+                    <a href="/resume" className="mt-3 inline-block text-sm font-medium text-accent hover:underline">Set up your résumé</a>
                   </div>
-                  <div className="max-h-[28rem] overflow-y-auto whitespace-pre-wrap text-sm leading-7 text-ink-soft">{outputs[activeTab]}</div>
-                </div>
+                ) : (
+                  <div className="mt-3 rounded-xl border border-line bg-surface p-5 shadow-card" role="tabpanel" aria-label={`${TAILOR_ACTION_LABEL[activeTab]} result`}>
+                    <div className="mb-3 flex items-center justify-between gap-3 border-b border-line-soft pb-3">
+                      <h4 className="font-semibold text-ink">{TAILOR_ACTION_LABEL[activeTab]}</h4>
+                      <span className="inline-flex items-center gap-1.5 text-xs text-stage-offer"><FileCheck2 className="h-3.5 w-3.5" /> Saved</span>
+                    </div>
+                    <div className="max-h-[28rem] overflow-y-auto whitespace-pre-wrap text-sm leading-7 text-ink-soft">{outputs[activeTab]}</div>
+                  </div>
+                )}
 
                 <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-h-5 text-xs text-ink-faint" aria-live="polite">{copyNote ?? auditNote} {auditNote && <a href="/privacy" className="font-medium text-accent hover:underline">Open Privacy</a>}</div>
@@ -522,8 +578,8 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
         onApprove={approvePreflight}
         onCancel={() => setPendingAction(null)}
       />
-      {pdfOpen && resumeDocument && (
-        <ResumePdfPreview document={resumeDocument} application={application} onClose={() => setPdfOpen(false)} />
+      {pdfOpen && tailoredResume && (
+        <StructuredResumePreview resume={tailoredResume} role={application.role} onClose={() => setPdfOpen(false)} />
       )}
     </>
   );

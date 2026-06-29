@@ -34,7 +34,14 @@ import { ModalShell } from './ApplicationForm';
 import TailorFlow from '../tailor/TailorFlow';
 import { ARTIFACT_KIND_LABEL, loadTailorArtifacts } from '../tailor/tailorArtifacts';
 import ResumePdfPreview from '../tailor/ResumePdfPreview';
+import StructuredResumePreview from '../tailor/StructuredResumePreview';
 import { buildResumeDocument, type ResumeDocument } from '../tailor/resumeDocument';
+import {
+  buildStructuredResumeDocument,
+  flattenResumeText,
+  parseStructuredResumeJson,
+  type StructuredResume,
+} from '../../shared/domain/resume';
 
 interface ApplicationDetailProps {
   application: Application;
@@ -77,6 +84,7 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
   const [profile, setProfile] = useState<Profile | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
   const [pdfDocument, setPdfDocument] = useState<ResumeDocument | null>(null);
+  const [pdfResume, setPdfResume] = useState<StructuredResume | null>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -164,8 +172,20 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
   }
 
   function openSavedResumePdf(artifact: Artifact) {
-    if (artifact.kind !== 'tailored-resume' || !profile) return;
+    if (artifact.kind !== 'tailored-resume') return;
     setPdfError(null);
+    // B6.4 tailored résumés persist the applied StructuredResume as JSON → re-render deterministically
+    // via the same structured template as the download. Pre-B6.4 artifacts hold Markdown → fall back
+    // to the legacy ResumeDocument renderer so old saved kits still preview.
+    const structured = parseStructuredResumeJson(artifact.content);
+    if (structured) {
+      setPdfResume(structured);
+      return;
+    }
+    if (!profile) {
+      setPdfError('This older saved résumé needs your profile to preview. Open Profile, then retry.');
+      return;
+    }
     setPdfDocument(buildResumeDocument({
       content: artifact.content,
       profile,
@@ -221,6 +241,16 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
     setSavingOutcome(false);
     setLogging(false);
     setForm(emptyOutcomeForm());
+  }
+
+  if (pdfResume) {
+    return (
+      <StructuredResumePreview
+        resume={pdfResume}
+        role={application.role}
+        onClose={() => setPdfResume(null)}
+      />
+    );
   }
 
   if (pdfDocument) {
@@ -307,30 +337,41 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
             </p>
           ) : (
             <ul className="space-y-2">
-              {artifacts.map((artifact) => (
+              {artifacts.map((artifact) => {
+                // B6.4 tailored résumés persist the StructuredResume as JSON; show the flattened,
+                // readable résumé text (not raw JSON) and don't require the profile to preview.
+                const structured = artifact.kind === 'tailored-resume'
+                  ? parseStructuredResumeJson(artifact.content)
+                  : null;
+                const body = structured
+                  ? flattenResumeText(buildStructuredResumeDocument(structured)).join('\n')
+                  : artifact.content;
+                const previewNeedsProfile = artifact.kind === 'tailored-resume' && !structured;
+                return (
                 <li key={artifact.id}>
                   <details className="rounded-xl border border-line-soft bg-surface-2/30 px-3 py-2">
                     <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm">
                       <span className="flex items-center gap-2 font-medium text-ink"><FileCheck2 className="h-4 w-4 text-stage-offer" />{ARTIFACT_KIND_LABEL[artifact.kind]}</span>
                       <span className="text-xs text-ink-faint">{new Date(artifact.created_at).toLocaleDateString()}</span>
                     </summary>
-                    <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap border-t border-line-soft pt-3 font-sans text-sm leading-6 text-ink-soft">{artifact.content}</pre>
+                    <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap border-t border-line-soft pt-3 font-sans text-sm leading-6 text-ink-soft">{body}</pre>
                     {artifact.kind === 'tailored-resume' && (
                       <div className="mt-3 flex justify-end">
                         <Button
                           variant="secondary"
                           size="sm"
-                          disabled={!profile}
+                          disabled={previewNeedsProfile && (profileLoading || !profile)}
                           onClick={() => openSavedResumePdf(artifact)}
                         >
-                          {profileLoading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-                          {profileLoading ? 'Loading profile…' : 'Preview PDF'}
+                          {previewNeedsProfile && profileLoading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                          {previewNeedsProfile && profileLoading ? 'Loading profile…' : 'Preview PDF'}
                         </Button>
                       </div>
                     )}
                   </details>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
           {pdfError && <p className="mt-2 text-sm text-stage-rejected" role="alert">{pdfError}</p>}

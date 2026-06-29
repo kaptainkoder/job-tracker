@@ -9,6 +9,7 @@ interface TestGlobals {
   __DOM_TESTS_DONE__?: boolean;
   __LLM_CALLS__: Array<{ action: string }>;
   __SUPABASE_INSERTS__: Array<Record<string, unknown>>;
+  __SUPABASE_ROWS__: Record<string, unknown>;
   __COPIED_TEXT__?: string;
 }
 const globals = globalThis as unknown as TestGlobals;
@@ -106,7 +107,16 @@ async function main() {
       globals.__SUPABASE_INSERTS__.map((row) => row.kind),
       ['tailored-resume', 'cover-letter', 'prep'],
     );
-    assert.match(document.body.textContent ?? '', /Generated tailor output/);
+    // The résumé action runs the STRUCTURED path (B6.4): the tab shows the flattened, readable
+    // tailored résumé (not raw JSON, not the prose stub), and the persisted artifact is its JSON.
+    assert.match(document.body.textContent ?? '', /Builds reliable data pipelines/);
+    assert.match(document.body.textContent ?? '', /Example Co/);
+    assert.doesNotMatch(document.body.textContent ?? '', /Generated tailor output/);
+    assert.doesNotMatch(document.body.textContent ?? '', /"contact"/);
+    const tailorRow = globals.__SUPABASE_INSERTS__.find((row) => row.kind === 'tailored-resume');
+    assert.ok(tailorRow, 'expected a tailored-resume artifact');
+    const persisted = JSON.parse(String(tailorRow!.content));
+    assert.equal(persisted.contact.fullName, 'Karan', 'tailored résumé persists as StructuredResume JSON');
     assert.doesNotMatch(document.body.textContent ?? '', /Generated cover output/);
     await act(async () => click('Cover letter'));
     assert.match(document.body.textContent ?? '', /Generated cover output/);
@@ -147,6 +157,38 @@ async function main() {
     await waitForText(/client-side render/i);
     assert.ok(document.querySelector('[data-testid="resume-a4-preview"]'), 'PDF preview should reopen');
     await cleanup();
+  });
+
+  await test('with no confirmed structured résumé the tailor action is gated and makes zero résumé egress', async () => {
+    globals.__LLM_CALLS__.length = 0;
+    globals.__SUPABASE_INSERTS__.length = 0;
+    const savedResume = globals.__SUPABASE_ROWS__.resume_structured;
+    globals.__SUPABASE_ROWS__.resume_structured = null;
+    try {
+      const cleanup = await mount();
+      await act(async () => click('Review privacy & continue'));
+      await act(async () => click('Not in my experience'));
+      await act(async () => click('Generate the kit'));
+      // The chain starts at the cover letter — the résumé action never fires.
+      await act(async () => click('Approve & send'));
+      await waitForText(/Interview prep sends a request/);
+      await act(async () => click('Approve & send'));
+      await waitForText(/Your saved tailoring kit/i);
+
+      assert.deepEqual(globals.__LLM_CALLS__.map((call) => call.action), ['cover', 'prep']);
+      assert.deepEqual(
+        globals.__SUPABASE_INSERTS__.map((row) => row.kind),
+        ['cover-letter', 'prep'],
+      );
+      await act(async () => click('Tailored résumé'));
+      assert.match(document.body.textContent ?? '', /Set up your résumé first/i);
+      // No structured résumé → the Download PDF action is disabled (nothing to render).
+      const download = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('Download PDF'));
+      assert.ok((download as HTMLButtonElement | undefined)?.disabled, 'Download must be disabled with no résumé');
+      await cleanup();
+    } finally {
+      globals.__SUPABASE_ROWS__.resume_structured = savedResume;
+    }
   });
 
   globals.__DOM_TESTS_DONE__ = true;

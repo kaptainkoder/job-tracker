@@ -210,6 +210,41 @@ export function flattenResumeText(doc: StructuredResumeDocument): string[] {
   return out;
 }
 
+// Tolerant guard + parser for a persisted StructuredResume (Wave B · B6.4). The tailored-résumé
+// artifact stores the applied StructuredResume as JSON in `artifact.content` so a saved kit can be
+// re-rendered deterministically later (preview == download). Legacy tailored artifacts hold Markdown
+// (the pre-B6.4 prose path), so this returns null on anything that is not a well-formed structured
+// résumé — letting the caller fall back to the legacy renderer instead of crashing.
+function isResumeContactShape(value: unknown): value is ResumeContact {
+  if (!value || typeof value !== 'object') return false;
+  const c = value as Record<string, unknown>;
+  return typeof c.fullName === 'string' && typeof c.title === 'string' && Array.isArray(c.links);
+}
+
+export function parseStructuredResumeJson(raw: string): StructuredResume | null {
+  if (typeof raw !== 'string') return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const o = parsed as Record<string, unknown>;
+  if (!isResumeContactShape(o.contact)) return null;
+  if (typeof o.summary !== 'string') return null;
+  if (
+    !Array.isArray(o.awards) ||
+    !Array.isArray(o.experience) ||
+    !Array.isArray(o.projects) ||
+    !Array.isArray(o.education) ||
+    !Array.isArray(o.skills)
+  ) {
+    return null;
+  }
+  return parsed as StructuredResume;
+}
+
 // Stable, PII-free download filename derived from the structured résumé + target role.
 export function structuredResumeFilename(contact: ResumeContact, role?: string | null): string {
   const base = [contact.fullName, role, 'resume']

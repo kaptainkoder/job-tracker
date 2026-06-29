@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   buildStructuredResumeDocument,
   flattenResumeText,
+  parseStructuredResumeJson,
   structuredResumeFilename,
   type StructuredResume,
 } from './resume';
@@ -121,4 +122,25 @@ test('structuredResumeFilename is stable, lowercased, and PII-free', () => {
     'karan-virender-mahajan-senior-data-scientist-resume.pdf',
   );
   assert.equal(structuredResumeFilename({ fullName: '', title: '', links: [] }, null), 'resume.pdf');
+});
+
+// --- parseStructuredResumeJson: round-trip persisted résumé, reject legacy/garbage ----------------
+
+test('parseStructuredResumeJson round-trips a persisted StructuredResume', () => {
+  const parsed = parseStructuredResumeJson(JSON.stringify(resume));
+  assert.ok(parsed, 'a well-formed StructuredResume JSON must parse');
+  // Deep round-trip: the re-rendered text matches the source résumé exactly (no loss, no invention).
+  assert.deepEqual(
+    flattenResumeText(buildStructuredResumeDocument(parsed!)),
+    flattenResumeText(buildStructuredResumeDocument(resume)),
+  );
+});
+
+test('parseStructuredResumeJson rejects legacy Markdown and garbage (caller falls back)', () => {
+  assert.equal(parseStructuredResumeJson('# Tailored résumé\n\n## Summary\n- Did things'), null);
+  assert.equal(parseStructuredResumeJson('not json at all'), null);
+  assert.equal(parseStructuredResumeJson('{"contact":{"fullName":"X"}}'), null, 'missing title/arrays → null');
+  assert.equal(parseStructuredResumeJson('[]'), null, 'array root → null');
+  assert.equal(parseStructuredResumeJson('null'), null);
+  assert.equal(parseStructuredResumeJson(''), null);
 });
