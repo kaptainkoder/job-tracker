@@ -73,6 +73,10 @@ Last verified: 2026-06-27.
      Verified directly in PostgreSQL: `public.artifacts` exists with RLS enabled, policy
      `own artifacts` is present, and deferred constraint `outcomes_artifact_id_fkey` points outcomes
      at generated artifacts. The migration is idempotent (policy recreated; FK catalog-guarded).
+   - **`0006_structured_resume.sql` applied 2026-06-29** via this same `SUPABASE_DB_URL` path.
+     Verified directly in PostgreSQL: `public.resume_structured` exists (PK `user_id`, `content`
+     jsonb, `source_filename`, `parsed_at`/`confirmed_at`/`created_at`/`updated_at`) with RLS enabled
+     and policy `own resume_structured` present. Idempotent (table/policy/trigger guarded).
 6. **Vercel browser env:** from the linked project folder, run
    `vercel env add VITE_SUPABASE_URL production` and
    `vercel env add VITE_SUPABASE_ANON_KEY production`, then repeat with `development`. These four
