@@ -1,0 +1,111 @@
+{
+  "contact": {
+    "fullName": "Karan Virender Mahajan",
+    "title": "Manager - Data Science (Commercial Marketing Decision Science)",
+    "phone": "000-000-0000",
+    "email": "redacted@example.com",
+    "location": "Gurgaon, India",
+    "links": [{ "label": "LinkedIn", "url": "https://www.linkedin.com/in/redacted" }]
+  },
+  "summary": "Certified Financial Risk Manager (FRM) and Data Science Manager with 4+ years of expertise in commercial marketing decision science and predictive analytics in the financial services sector. Currently leading a team of 4 analysts, driving incremental revenue through advanced ML models and strategic customer targeting frameworks. I specialize in translating complex data problems for multiple stakeholders into actionable models and business strategies that drive growth.",
+  "awards": [
+    { "title": "2024 Centurion Award", "detail": "Highest award in the firm (Top 1%)" },
+    { "title": "Leadership in Action (Q4 2025)" },
+    { "title": "Analyst of the Quarter (Q4 2022, Q1 2024)" },
+    { "title": "Q1 2025 EVP Award for Excellence" },
+    { "title": "Q2 2023 CoE SVP Star Award" }
+  ],
+  "experience": [
+    {
+      "org": "Global Financial Services Co.",
+      "orgDetail": "Credit and Fraud Risk",
+      "location": "Gurgaon, India",
+      "title": "Manager - Data Science",
+      "start": "07/2025",
+      "end": "Present",
+      "scope": "Incremental spend and balance prediction models for customer targeting and acquisition across the US commercial portfolio",
+      "bullets": [
+        "Led the end-to-end launch of an s-learner XGBoost incremental Balance Model, driving $15M in annual incremental revenue and improving targeting precision",
+        "Developed a custom GPT-based Feature Discovery solution, creating 10+ novel features to boost model performance for the high-spend decliners segment",
+        "Spearheaded adoption of a Google Cloud Platform model-building capability, acting as the platform champion for Commercial Marketing",
+        "Deployed 3 models on the new platform, achieving a 5x reduction in runtime with end-to-end platform testing"
+      ]
+    },
+    {
+      "org": "Global Financial Services Co.",
+      "orgDetail": "Credit and Fraud Risk",
+      "location": "Gurgaon, India",
+      "title": "Senior Analyst - Data Science",
+      "start": "02/2024",
+      "end": "07/2025",
+      "scope": "Predictive Response models for cross-sell/upgrade and Small Business Owner (SBO) Identification model for the US customer portfolio",
+      "bullets": [
+        "Achieved a 19.5% lift in top-decile capture rate and a $1.45M revenue increase by unifying digital customer cross-sell and upgrade response models",
+        "Mentored 5+ analysts (including an intern securing a PPO) by developing an SOP with multiple approaches for response model unification across channels",
+        "Spearheaded the launch of the Gen 4 SBO model, driving 700K incremental SBOs and $7M revenue, increasing response rates by 1.8x"
+      ]
+    },
+    {
+      "org": "Global Financial Services Co.",
+      "orgDetail": "Credit and Fraud Risk",
+      "location": "Gurgaon, India",
+      "title": "Analyst - Data Science",
+      "start": "05/2022",
+      "end": "02/2024",
+      "scope": "Predictive Response models, Corporate Cross-sell, and Small Business Owner (SBO) Identification model for the US customer portfolio",
+      "bullets": [
+        "Developed the Gen 1 model for piloting Commercial-to-Corporate Cross-sell, resulting in an estimated $8.7M revenue impact",
+        "Implemented a robust tiering structure for the Gen 3 SBO model, capturing 1.1M incremental SBOs and an estimated $11.7M revenue impact",
+        "Developed the first standalone Digital Commercial Supplementary model to achieve a 41.25% lift in capture rate and $18.54M revenue impact"
+      ]
+    },
+    {
+      "org": "Quetzal Online Pvt Ltd",
+      "orgDetail": "QuezX.com",
+      "location": "Mumbai, India",
+      "title": "Machine Learning Intern",
+      "start": "05/2019",
+      "end": "07/2019",
+      "scope": "Applicant Ranking Prediction Model and a Validation Model with quantifiable metrics for a B2B Recruitment Consultant Network",
+      "bullets": [
+        "Increased candidate ranking prediction accuracy to 85% by developing a dynamic XGBoost-based algorithm to provide relative candidate rankings",
+        "Reduced applicant screening time by 5x through K-Means, Spectral, and GMM clustering to group 1000+ similar applicants"
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "name": "Modeling Super Bowl (Fraud Identification)",
+      "location": "Gurgaon, India",
+      "scope": "Mitigating label noise from incorrectly tagged fraud transactions degrading model performance (Internal Hackathon)",
+      "bullets": [
+        "Developed a novel SVM-based anomaly detection framework on 4 transaction segments and dual thresholding to identify mislabelled fraud cases",
+        "Improved existing model performance by achieving a 1.6% GINI lift and 3.36% fraud coverage uplift with robust benchmarking (2nd runner up)"
+      ]
+    }
+  ],
+  "education": [
+    {
+      "school": "IIT Kharagpur",
+      "detail": "8.82",
+      "location": "Kharagpur, India",
+      "degree": "Dual Degree (B.Tech Chemical Engineering & M.Tech Financial Engineering), Minor (Computer Science)",
+      "start": "08/2017",
+      "end": "06/2022"
+    },
+    {
+      "school": "Army Public School, Chandimandir",
+      "detail": "94.6%",
+      "location": "Chandimandir, India",
+      "degree": "AISSCE (CBSE) - XII",
+      "start": "04/2017",
+      "end": "05/2017"
+    }
+  ],
+  "skills": [
+    {
+      "label": "Technology",
+      "items": ["XGBoost", "Python", "SQL", "BigQuery", "GCP", "PySpark", "Git", "Airflow", "JIRA", "pandas", "numpy", "Hive", "Tableau", "Machine Learning", "Ensemble Methods"]
+    }
+  ]
+}
