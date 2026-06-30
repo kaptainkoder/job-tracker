@@ -126,7 +126,34 @@ async function main() {
     assert.match(document.body.textContent ?? '', /Download PDF/);
     await act(async () => click('Download PDF'));
     await waitForText(/client-side render/i);
-    assert.ok(document.querySelector('[data-testid="resume-a4-preview"]'));
+    const preview = document.querySelector('[data-testid="resume-a4-preview"]');
+    assert.ok(preview);
+    // B6.4-R: the preview renders the ACTUAL generated PDF bytes to a <canvas> (preview == download).
+    assert.ok(preview!.querySelector('canvas'), 'preview must paint the PDF onto a canvas');
+
+    // The in-preview Download re-saves the cached bytes — no import()/fetch() on the click. Wait for
+    // the bytes to load (button enables), then prove the click goes through the cached-bytes save path.
+    const overlay = document.querySelector('[role="dialog"][aria-labelledby="pdf-preview-heading"]');
+    assert.ok(overlay);
+    const previewDownload = [...overlay!.querySelectorAll('button')].find((b) => b.textContent?.includes('Download PDF'));
+    assert.ok(previewDownload, 'preview must offer its own Download PDF');
+    for (let i = 0; i < 20 && (previewDownload as HTMLButtonElement).disabled; i += 1) {
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
+    }
+    assert.equal((previewDownload as HTMLButtonElement).disabled, false, 'Download enables once bytes are ready');
+    let savedFromCache = false;
+    const urlApi = globalThis.URL as unknown as { createObjectURL?: unknown; revokeObjectURL?: unknown };
+    const realCreate = urlApi.createObjectURL;
+    const realRevoke = urlApi.revokeObjectURL;
+    urlApi.createObjectURL = () => { savedFromCache = true; return '#'; }; // '#' avoids jsdom navigation
+    urlApi.revokeObjectURL = () => {};
+    try {
+      await act(async () => previewDownload!.dispatchEvent(new window.MouseEvent('click', { bubbles: true })));
+    } finally {
+      urlApi.createObjectURL = realCreate;
+      urlApi.revokeObjectURL = realRevoke;
+    }
+    assert.ok(savedFromCache, 'in-preview Download saves cached bytes (no click-time network)');
     await cleanup();
   });
 

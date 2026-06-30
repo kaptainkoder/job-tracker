@@ -10,6 +10,7 @@ import {
 } from './resume';
 import {
   createStructuredResumePdf,
+  splitMetricRuns,
   structuredResumePdfBytes,
 } from '../../features/tailor/resumePdf';
 
@@ -106,6 +107,25 @@ test('long content paginates instead of clipping', () => {
   };
   const pdf = createStructuredResumePdf(long);
   assert.ok(pdf.getNumberOfPages() > 1, 'long content should paginate');
+});
+
+test('the real fixture résumé renders on exactly ONE A4 page (B6.4-R)', () => {
+  const interBase64 = readFileSync('src/assets/InterVariable.ttf').toString('base64');
+  // With the bundled font (the production path) the full real résumé must fit on a single page.
+  assert.equal(createStructuredResumePdf(resume, interBase64).getNumberOfPages(), 1);
+  // …and the same with the fallback font, so the one-page invariant never depends on font loading.
+  assert.equal(createStructuredResumePdf(resume).getNumberOfPages(), 1);
+});
+
+test('splitMetricRuns bolds metric tokens and leaves prose normal (B6.4-R)', () => {
+  const runs = splitMetricRuns('Drove $15M revenue and a 41.25% lift at 5x speed');
+  const bold = runs.filter((r) => r.bold).map((r) => r.text);
+  assert.deepEqual(bold, ['$15M', '41.25%', '5x']);
+  // Round-trip: concatenating the runs reproduces the original text exactly (no loss/duplication).
+  assert.equal(runs.map((r) => r.text).join(''), 'Drove $15M revenue and a 41.25% lift at 5x speed');
+  // Prose with no metric is a single normal run.
+  const plain = splitMetricRuns('Led the platform team');
+  assert.deepEqual(plain, [{ text: 'Led the platform team', bold: false }]);
 });
 
 test('renderer registers the Inter font when supplied', () => {

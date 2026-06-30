@@ -167,224 +167,350 @@ function joinContactLine(contact: ResumeContact): string {
     .join(DOT);
 }
 
-export function createStructuredResumePdf(resume: StructuredResume, interFontBase64?: string): jsPDF {
-  const doc = buildStructuredResumeDocument(resume);
-  const pdf = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
-  const fontFamily = interFontBase64 ? 'Inter' : 'helvetica';
-  if (interFontBase64) {
-    pdf.addFileToVFS('InterVariable.ttf', interFontBase64);
-    pdf.addFont('InterVariable.ttf', 'Inter', 'normal');
-    pdf.addFont('InterVariable.ttf', 'Inter', 'bold');
-  }
-  const contentWidth = PAGE.width - PAGE.marginX * 2;
-  const centerX = PAGE.width / 2;
-  const rightX = PAGE.width - PAGE.marginX;
-  let y = PAGE.marginTop;
+// A run of text that is either normal or bold — the unit of the run-based layout that lets the
+// renderer bold key metrics inside an otherwise-normal bullet (Wave B · B6.4-R).
+export interface TextRun {
+  text: string;
+  bold: boolean;
+}
 
-  const addPage = () => { pdf.addPage('a4', 'portrait'); y = PAGE.marginTop; };
+// Metric tokens to emphasise: $15M, 41.25%, 5x, 700K, 10+, 1.1M, 1.8x, 85% … (a number, an optional
+// leading $, an optional %/x/k/m/bn unit, an optional trailing +). Pure; exported for unit testing.
+const METRIC_TOKEN = /\$?\d[\d.,]*(?:%|x|k|m|bn)?\+?/gi;
+
+export function splitMetricRuns(text: string): TextRun[] {
+  const runs: TextRun[] = [];
+  let last = 0;
+  METRIC_TOKEN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = METRIC_TOKEN.exec(text)) !== null) {
+    if (match.index > last) runs.push({ text: text.slice(last, match.index), bold: false });
+    runs.push({ text: match[0], bold: true });
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) runs.push({ text: text.slice(last), bold: false });
+  return runs.length ? runs : [{ text, bold: false }];
+}
+
+// Base (scale = 1) point sizes. The renderer multiplies these by a density `scale` chosen to land
+// the whole résumé on one A4 page (down to FLOOR), then renders once at that scale.
+const STRUCT = { marginX: 16, marginTop: 14, marginBottom: 12 } as const;
+const STRUCT_FLOOR = 0.6;
+const STRUCT_SIZE = {
+  name: 18, title: 9.6, contact: 8.4, heading: 9.5, summary: 9,
+  awardTitle: 8.6, awardDetail: 7.8, org: 9.6, role: 9.2, scope: 8.6,
+  bullet: 8.8, proj: 9.4, school: 9.4, degree: 8.8, skills: 8.8,
+} as const;
+
+// Width of a sequence of runs at a fixed font size (bold runs measured with the bold face).
+function measureRunWidth(pdf: jsPDF, runs: TextRun[], fontFamily: string, size: number): number {
+  let width = 0;
+  for (const run of runs) {
+    pdf.setFont(fontFamily, run.bold ? 'bold' : 'normal');
+    pdf.setFontSize(size);
+    width += pdf.getTextWidth(run.text);
+  }
+  return width;
+}
+
+// Draw a sequence of runs on ONE baseline at a fixed size (no wrapping); bold runs use boldColor.
+function drawRunLine(
+  pdf: jsPDF, runs: TextRun[], x: number, y: number, fontFamily: string,
+  size: number, normalColor: string, boldColor: string,
+): void {
+  let cx = x;
+  for (const run of runs) {
+    pdf.setFont(fontFamily, run.bold ? 'bold' : 'normal');
+    pdf.setFontSize(size);
+    pdf.setTextColor(run.bold ? boldColor : normalColor);
+    pdf.text(run.text, cx, y);
+    cx += pdf.getTextWidth(run.text);
+  }
+}
+
+// Draw the entire structured résumé into `pdf` at a density `scale`. Returns the final y (the
+// absolute bottom of the content). When `paginate` is false the renderer never breaks the page —
+// the caller uses the returned height purely to MEASURE whether this scale fits on one page; when
+// true it breaks normally (the >1-page fallback for résumés too large even at FLOOR). Both passes
+// run the identical code, so the chosen scale that measured as fitting renders on exactly one page.
+function renderStructuredInto(
+  pdf: jsPDF,
+  doc: ReturnType<typeof buildStructuredResumeDocument>,
+  scale: number,
+  fontFamily: string,
+  paginate: boolean,
+): number {
+  const { marginX: MX, marginTop: MT, marginBottom: MB } = STRUCT;
+  const contentWidth = PAGE.width - MX * 2;
+  const centerX = PAGE.width / 2;
+  const rightX = PAGE.width - MX;
+  const sz = (base: number) => base * scale;
+  let y = MT;
+
+  const addPage = () => { pdf.addPage('a4', 'portrait'); y = MT; };
   const ensureSpace = (height: number) => {
-    if (y + height > PAGE.height - PAGE.marginBottom) addPage();
+    if (paginate && y + height > PAGE.height - MB) addPage();
   };
 
-  // A left-aligned block of text that wraps within an optional right boundary, advancing y.
+  // Wrapped paragraph (summary, scope) at a scaled size.
   const writeWrapped = (
     text: string,
-    options: { size?: number; color?: string; bold?: boolean; indent?: number; lineHeight?: number; maxWidth?: number } = {},
+    options: { size: number; color: string; bold?: boolean; indent?: number; lineHeight: number },
   ) => {
-    const size = options.size ?? 9.4;
     const indent = options.indent ?? 0;
-    const lineHeight = options.lineHeight ?? 4.6;
     pdf.setFont(fontFamily, options.bold ? 'bold' : 'normal');
-    pdf.setFontSize(size);
-    pdf.setTextColor(options.color ?? INK_SOFT);
-    const width = (options.maxWidth ?? contentWidth) - indent;
-    const lines = pdf.splitTextToSize(text, width) as string[];
+    pdf.setFontSize(options.size);
+    pdf.setTextColor(options.color);
+    const lines = pdf.splitTextToSize(text, contentWidth - indent) as string[];
     for (const line of lines) {
-      ensureSpace(lineHeight);
-      pdf.text(line, PAGE.marginX + indent, y);
-      y += lineHeight;
+      ensureSpace(options.lineHeight);
+      pdf.text(line, MX + indent, y);
+      y += options.lineHeight;
     }
   };
 
-  // A header row with left text (possibly bold) and an optional right-aligned meta string on the
-  // SAME baseline. The left text is clipped to leave room for the right text.
+  // A header row: left text shrunk-to-fit (never clipped) on one line, with an optional right-aligned
+  // meta string (dates / location) on the same baseline.
   const writeRow = (
     left: string,
     right: string | undefined,
-    options: { leftSize?: number; leftColor?: string; leftBold?: boolean; rightSize?: number; rightColor?: string } = {},
+    options: { leftSize: number; leftColor: string; leftBold: boolean },
   ) => {
-    const leftSize = options.leftSize ?? 9.6;
-    const lineHeight = leftSize * 0.5 + 0.4;
+    const lineHeight = options.leftSize * 0.5 + 0.6;
     ensureSpace(lineHeight);
     let rightWidth = 0;
     if (right) {
       pdf.setFont(fontFamily, 'normal');
-      pdf.setFontSize(options.rightSize ?? 8.4);
+      pdf.setFontSize(sz(STRUCT_SIZE.contact));
       rightWidth = pdf.getTextWidth(right) + 3;
-      pdf.setTextColor(options.rightColor ?? INK_FAINT);
+      pdf.setTextColor(INK_FAINT);
       pdf.text(right, rightX, y, { align: 'right' });
     }
+    const avail = contentWidth - rightWidth;
+    let leftSize = options.leftSize;
     pdf.setFont(fontFamily, options.leftBold ? 'bold' : 'normal');
     pdf.setFontSize(leftSize);
-    pdf.setTextColor(options.leftColor ?? INK);
-    const leftLines = pdf.splitTextToSize(left, contentWidth - rightWidth) as string[];
-    pdf.text(leftLines[0] ?? '', PAGE.marginX, y);
+    const w = pdf.getTextWidth(left);
+    if (w > avail && w > 0) {
+      leftSize = Math.max(sz(6.2), (options.leftSize * avail) / w);
+      pdf.setFontSize(leftSize);
+    }
+    pdf.setTextColor(options.leftColor);
+    pdf.text(left, MX, y);
+    y += lineHeight;
+  };
+
+  // A single-line bullet whose font shrinks (to a floor) so it never wraps; metric tokens are bold.
+  const writeBullet = (text: string) => {
+    const runs = splitMetricRuns(text.trim());
+    const indent = 4.5;
+    const avail = contentWidth - indent;
+    const base = sz(STRUCT_SIZE.bullet);
+    let size = base;
+    const w = measureRunWidth(pdf, runs, fontFamily, size);
+    if (w > avail && w > 0) size = Math.max(sz(6), (base * avail) / w);
+    const lineHeight = size * 0.5 + 0.7;
+    ensureSpace(lineHeight);
+    pdf.setFont(fontFamily, 'bold');
+    pdf.setFontSize(size);
+    pdf.setTextColor(INK_SOFT);
+    pdf.text('•', MX + 0.5, y);
+    drawRunLine(pdf, runs, MX + indent, y, fontFamily, size, INK_SOFT, INK);
+    y += lineHeight;
+  };
+
+  // Wrapped runs (used for the skills line so the group label is bold and the items wrap normally).
+  const writeWrappedRuns = (runs: TextRun[], size: number, lineHeight: number) => {
+    let x = MX;
+    for (const run of runs) {
+      pdf.setFont(fontFamily, run.bold ? 'bold' : 'normal');
+      pdf.setFontSize(size);
+      pdf.setTextColor(run.bold ? INK : INK_SOFT);
+      const tokens = run.text.match(/\S+|\s+/g) ?? [];
+      for (const token of tokens) {
+        const tw = pdf.getTextWidth(token);
+        if (x + tw > MX + contentWidth && x > MX) {
+          y += lineHeight;
+          x = MX;
+          if (/^\s+$/.test(token)) continue;
+        }
+        ensureSpace(lineHeight);
+        pdf.text(token, x, y);
+        x += tw;
+      }
+    }
     y += lineHeight;
   };
 
   const sectionHeading = (heading: string) => {
-    ensureSpace(11);
-    y += 1.5;
+    const hs = sz(STRUCT_SIZE.heading);
+    ensureSpace(hs * 0.5 + sz(5));
+    y += sz(1.2);
     pdf.setFont(fontFamily, 'bold');
-    pdf.setFontSize(9.5);
+    pdf.setFontSize(hs);
     pdf.setTextColor(INK);
     pdf.text(heading, centerX, y, { align: 'center' });
-    y += 2;
+    y += sz(1.7);
     pdf.setDrawColor(INK_FAINT);
     pdf.setLineWidth(0.2);
-    pdf.line(PAGE.marginX, y, rightX, y);
-    y += 5;
+    pdf.line(MX, y, rightX, y);
+    y += sz(3.6);
   };
-
-  pdf.setProperties({
-    title: `${resume.contact.fullName} — résumé`,
-    subject: resume.contact.title,
-    creator: 'Job Tracker',
-  });
 
   // Header — centered name, title, contact line.
   pdf.setFont(fontFamily, 'bold');
-  pdf.setFontSize(18);
+  pdf.setFontSize(sz(STRUCT_SIZE.name));
   pdf.setTextColor(INK);
-  pdf.text(resume.contact.fullName.toUpperCase(), centerX, y + 2, { align: 'center' });
-  y += 7;
-  if (resume.contact.title.trim()) {
+  pdf.text(doc.contact.fullName.toUpperCase(), centerX, y + sz(STRUCT_SIZE.name) * 0.32, { align: 'center' });
+  y += sz(STRUCT_SIZE.name) * 0.46 + 1.4;
+  if (doc.contact.title.trim()) {
     pdf.setFont(fontFamily, 'normal');
-    pdf.setFontSize(9.6);
+    pdf.setFontSize(sz(STRUCT_SIZE.title));
     pdf.setTextColor(INK_SOFT);
-    pdf.text(resume.contact.title, centerX, y, { align: 'center' });
-    y += 5;
+    pdf.text(doc.contact.title, centerX, y, { align: 'center' });
+    y += sz(STRUCT_SIZE.title) * 0.5 + 0.4;
   }
-  const contactLine = joinContactLine(resume.contact);
+  const contactLine = joinContactLine(doc.contact);
   if (contactLine) {
     pdf.setFont(fontFamily, 'normal');
-    pdf.setFontSize(8.4);
+    pdf.setFontSize(sz(STRUCT_SIZE.contact));
     pdf.setTextColor(INK_FAINT);
     pdf.text(contactLine, centerX, y, { align: 'center' });
-    y += 4;
+    y += sz(STRUCT_SIZE.contact) * 0.5;
   }
 
   for (const section of doc.sections) {
     sectionHeading(section.heading);
 
     if (section.summary) {
-      writeWrapped(section.summary, { size: 9, color: INK_SOFT, lineHeight: 4.6 });
-      y += 2;
+      writeWrapped(section.summary, { size: sz(STRUCT_SIZE.summary), color: INK_SOFT, lineHeight: sz(STRUCT_SIZE.summary) * 0.5 + 0.4 });
+      y += sz(1.6);
     }
 
     if (section.awards?.length) {
-      // Two-column grid; each cell carries a title and an optional soft detail line.
       const gutter = 6;
       const colWidth = (contentWidth - gutter) / 2;
-      const colX = [PAGE.marginX, PAGE.marginX + colWidth + gutter];
+      const colX = [MX, MX + colWidth + gutter];
+      const titleLh = sz(STRUCT_SIZE.awardTitle) * 0.5 + 0.2;
+      const detailLh = sz(STRUCT_SIZE.awardDetail) * 0.5 + 0.2;
       for (let i = 0; i < section.awards.length; i += 2) {
         const pair = [section.awards[i], section.awards[i + 1]];
-        const cellHeights = pair.map((award) => {
-          if (!award) return 0;
-          let h = 4.6;
-          if (award.detail) h += 4.2;
-          return h;
-        });
-        const rowHeight = Math.max(...cellHeights, 4.6);
+        const rowHeight = Math.max(...pair.map((a) => (a ? titleLh + (a.detail ? detailLh : 0) : 0)), titleLh);
         ensureSpace(rowHeight + 1);
         const rowY = y;
         pair.forEach((award, col) => {
           if (!award) return;
           let cy = rowY;
           pdf.setFont(fontFamily, 'bold');
-          pdf.setFontSize(8.6);
+          pdf.setFontSize(sz(STRUCT_SIZE.awardTitle));
           pdf.setTextColor(INK);
           const titleLines = pdf.splitTextToSize(award.title, colWidth) as string[];
           pdf.text(titleLines[0] ?? '', colX[col], cy);
-          cy += 4.6;
+          cy += titleLh;
           if (award.detail) {
             pdf.setFont(fontFamily, 'normal');
-            pdf.setFontSize(7.8);
+            pdf.setFontSize(sz(STRUCT_SIZE.awardDetail));
             pdf.setTextColor(INK_FAINT);
             const detailLines = pdf.splitTextToSize(award.detail, colWidth) as string[];
             pdf.text(detailLines[0] ?? '', colX[col], cy);
           }
         });
-        y = rowY + rowHeight + 1.6;
+        y = rowY + rowHeight + 1.4;
       }
-      y += 1;
+      y += sz(0.8);
     }
 
     for (const exp of section.experience ?? []) {
       const orgLeft = [exp.org, exp.orgDetail ? `(${exp.orgDetail})` : null].filter(Boolean).join('  ');
-      writeRow(orgLeft, exp.location, { leftSize: 9.6, leftColor: INK, leftBold: false });
+      writeRow(orgLeft, exp.location, { leftSize: sz(STRUCT_SIZE.org), leftColor: INK, leftBold: false });
       const dates = [exp.start, exp.end].map((v) => v?.trim()).filter(Boolean).join(' - ');
-      writeRow(exp.title, dates || undefined, { leftSize: 9.2, leftColor: INK_SOFT, leftBold: true });
+      writeRow(exp.title, dates || undefined, { leftSize: sz(STRUCT_SIZE.role), leftColor: INK_SOFT, leftBold: true });
       if (exp.scope) {
-        writeWrapped(exp.scope, { size: 8.6, color: INK_FAINT, lineHeight: 4.2 });
+        writeWrapped(exp.scope, { size: sz(STRUCT_SIZE.scope), color: INK_FAINT, lineHeight: sz(STRUCT_SIZE.scope) * 0.5 });
       }
-      y += 0.5;
-      for (const bullet of exp.bullets.filter((b) => b.trim())) {
-        ensureSpace(5);
-        pdf.setFont(fontFamily, 'bold');
-        pdf.setFontSize(9);
-        pdf.setTextColor(INK_SOFT);
-        pdf.text('•', PAGE.marginX + 0.5, y);
-        writeWrapped(bullet, { indent: 4.5, lineHeight: 4.4, size: 8.8 });
-        y += 0.8;
-      }
-      y += 2.5;
+      y += sz(0.4);
+      for (const bullet of exp.bullets.filter((b) => b.trim())) writeBullet(bullet);
+      y += sz(2.2);
     }
 
     for (const project of section.projects ?? []) {
-      writeRow(project.name, project.location, { leftSize: 9.4, leftColor: INK, leftBold: false });
+      writeRow(project.name, project.location, { leftSize: sz(STRUCT_SIZE.proj), leftColor: INK, leftBold: false });
       if (project.scope) {
-        writeWrapped(project.scope, { size: 8.6, color: INK_FAINT, lineHeight: 4.2 });
+        writeWrapped(project.scope, { size: sz(STRUCT_SIZE.scope), color: INK_FAINT, lineHeight: sz(STRUCT_SIZE.scope) * 0.5 });
       }
-      y += 0.5;
-      for (const bullet of project.bullets.filter((b) => b.trim())) {
-        ensureSpace(5);
-        pdf.setFont(fontFamily, 'bold');
-        pdf.setFontSize(9);
-        pdf.setTextColor(INK_SOFT);
-        pdf.text('•', PAGE.marginX + 0.5, y);
-        writeWrapped(bullet, { indent: 4.5, lineHeight: 4.4, size: 8.8 });
-        y += 0.8;
-      }
-      y += 2.5;
+      y += sz(0.4);
+      for (const bullet of project.bullets.filter((b) => b.trim())) writeBullet(bullet);
+      y += sz(2.2);
     }
 
     for (const edu of section.education ?? []) {
       const schoolLeft = [edu.school, edu.detail ? `- ${edu.detail}` : null].filter(Boolean).join(' ');
-      writeRow(schoolLeft, edu.location, { leftSize: 9.4, leftColor: INK, leftBold: false });
+      writeRow(schoolLeft, edu.location, { leftSize: sz(STRUCT_SIZE.school), leftColor: INK, leftBold: false });
       const dates = [edu.start, edu.end].map((v) => v?.trim()).filter(Boolean).join(' - ');
-      writeRow(edu.degree, dates || undefined, { leftSize: 8.8, leftColor: INK_SOFT, leftBold: false });
-      y += 2;
+      writeRow(edu.degree, dates || undefined, { leftSize: sz(STRUCT_SIZE.degree), leftColor: INK_SOFT, leftBold: false });
+      y += sz(1.6);
     }
 
     if (section.skills?.length) {
       for (const group of section.skills) {
         const items = group.items.map((s) => s.trim()).filter(Boolean);
         if (!items.length) continue;
-        const prefix = group.label?.trim() ? `${group.label.trim()}: ` : '';
-        writeWrapped(`${prefix}${items.join('  ·  ')}`, { size: 8.8, color: INK_SOFT, lineHeight: 4.5 });
-        y += 1;
+        const runs: TextRun[] = [];
+        if (group.label?.trim()) runs.push({ text: `${group.label.trim()}: `, bold: true });
+        runs.push({ text: items.join('  ·  '), bold: false });
+        writeWrappedRuns(runs, sz(STRUCT_SIZE.skills), sz(STRUCT_SIZE.skills) * 0.5 + 0.4);
+        y += sz(0.8);
       }
     }
   }
 
+  return y;
+}
+
+export function createStructuredResumePdf(resume: StructuredResume, interFontBase64?: string): jsPDF {
+  const doc = buildStructuredResumeDocument(resume);
+  const fontFamily = interFontBase64 ? 'Inter' : 'helvetica';
+
+  const makePdf = (): jsPDF => {
+    const pdf = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
+    if (interFontBase64) {
+      pdf.addFileToVFS('InterVariable.ttf', interFontBase64);
+      pdf.addFont('InterVariable.ttf', 'Inter', 'normal');
+      pdf.addFont('InterVariable.ttf', 'Inter', 'bold');
+    }
+    pdf.setProperties({
+      title: `${resume.contact.fullName} — résumé`,
+      subject: resume.contact.title,
+      creator: 'Job Tracker',
+    });
+    return pdf;
+  };
+
+  // Pick the LARGEST density scale (1.0 → FLOOR) whose measured height fits one A4 page. Measurement
+  // uses a throwaway pdf with the same font so text metrics match the final render exactly.
+  const fitBottom = PAGE.height - STRUCT.marginBottom;
+  let scale = STRUCT_FLOOR;
+  for (let step = 100; step >= Math.round(STRUCT_FLOOR * 100); step -= 5) {
+    const candidate = step / 100;
+    if (renderStructuredInto(makePdf(), doc, candidate, fontFamily, false) <= fitBottom) {
+      scale = candidate;
+      break;
+    }
+  }
+
+  const pdf = makePdf();
+  renderStructuredInto(pdf, doc, scale, fontFamily, true);
+
+  // Page numbers only when the résumé genuinely spilled past one page.
   const pageCount = pdf.getNumberOfPages();
-  for (let page = 1; page <= pageCount; page += 1) {
-    pdf.setPage(page);
-    pdf.setFont(fontFamily, 'normal');
-    pdf.setFontSize(7.5);
-    pdf.setTextColor(INK_FAINT);
-    pdf.text(`${page} / ${pageCount}`, rightX, PAGE.height - 8, { align: 'right' });
+  if (pageCount > 1) {
+    for (let page = 1; page <= pageCount; page += 1) {
+      pdf.setPage(page);
+      pdf.setFont(fontFamily, 'normal');
+      pdf.setFontSize(7.5);
+      pdf.setTextColor(INK_FAINT);
+      pdf.text(`${page} / ${pageCount}`, PAGE.width - STRUCT.marginX, PAGE.height - 8, { align: 'right' });
+    }
   }
   return pdf;
 }

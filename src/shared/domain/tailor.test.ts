@@ -3,8 +3,11 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
   applyTailoredResume,
+  buildResumeNumbers,
   buildTailorMessages,
   buildTailorResumeMessages,
+  FOREIGN_TECH_DENYLIST,
+  groundReword,
   isTailorAction,
   parseTailoredResumePatch,
   TAILOR_ACTIONS,
@@ -311,4 +314,93 @@ test('tailorStructuredResume applies a valid patch end-to-end', () => {
   assert.equal(tailored.summary, 'E2E reworded.');
   assert.equal(tailored.experience[0].bullets[0], 'E2E bullet.');
   assert.equal(tailored.experience[0].org, resume.experience[0].org);
+});
+
+// ================================================================================================
+// B6.4-R — grounded truthfulness guard (denylist foreign tech + invented numbers; grounded prose OK)
+// ================================================================================================
+
+const numbers = buildResumeNumbers(resume);
+const allowed = new Set<string>(); // empty allowed-set → denylist terms are never whitelisted
+
+test('buildResumeNumbers captures source metrics and excludes invented ones', () => {
+  // Digit-cores present in the fixture (e.g. $15M, 41.25%, 700K, 1.1M).
+  assert.equal(numbers.has('15'), true);
+  assert.equal(numbers.has('41.25'), true);
+  assert.equal(numbers.has('700'), true);
+  assert.equal(numbers.has('1.1'), true);
+  // A number that never appears in the source.
+  assert.equal(numbers.has('50'), false);
+});
+
+test('FOREIGN_TECH_DENYLIST holds the named foreign tools/domains', () => {
+  for (const term of ['aws', 'snowflake', 'azure', 'databricks', 'aml']) {
+    assert.equal(FOREIGN_TECH_DENYLIST.includes(term), true);
+  }
+});
+
+test('groundReword rejects named foreign tools/domains not in the candidate stack', () => {
+  assert.equal(groundReword('Built data lakes on AWS and Snowflake', numbers, allowed), null);
+  assert.equal(groundReword('Migrated workloads onto Azure Databricks', numbers, allowed), null);
+  assert.equal(groundReword('Owned hands-on AML transaction monitoring', numbers, allowed), null);
+});
+
+test('groundReword ALLOWS grounded inference (validators / pipelines / regulatory)', () => {
+  // These are inferences grounded in the résumé, not foreign tools — they must pass unchanged.
+  const grounded = [
+    'Communicated model results to validators across the org',
+    'Supported robust, auditable data pipelines for the targeting platform',
+    'Drove regulatory-grade governance for credit-and-fraud-risk models',
+  ];
+  for (const text of grounded) assert.equal(groundReword(text, numbers, allowed), text);
+});
+
+test('groundReword rejects an invented metric but keeps a source metric', () => {
+  assert.equal(groundReword('Drove $50M in net-new annual revenue', numbers, allowed), null);
+  const kept = 'Drove $15M in annual incremental revenue with a 41.25% lift';
+  assert.equal(groundReword(kept, numbers, allowed), kept);
+});
+
+test('groundReword accepts the candidate’s listed skills on any wording', () => {
+  const text = 'Built XGBoost models in Python and SQL on GCP, orchestrated with Airflow';
+  assert.equal(groundReword(text, numbers, allowed), text);
+});
+
+test('applyTailoredResume drops a fabricated bullet but keeps the grounded one (fixture)', () => {
+  const patch = parseTailoredResumePatch(
+    JSON.stringify({
+      experience: [
+        {
+          ref: 0,
+          bullets: [
+            'Shipped an s-learner XGBoost Balance Model driving $15M in annual incremental revenue',
+            'Built the AML detection pipeline on AWS Snowflake', // fabricated → must be dropped
+          ],
+        },
+      ],
+    }),
+  );
+  assert.ok(patch);
+  const tailored = applyTailoredResume(resume, patch!);
+  const role = tailored.experience.find((e) => e.title === 'Manager - Data Science');
+  assert.ok(role);
+  assert.equal(role!.bullets.length, 1);
+  assert.match(role!.bullets[0], /\$15M/);
+  const flat = flattenResumeText(buildStructuredResumeDocument(tailored)).join('\n');
+  assert.doesNotMatch(flat, /AWS|Snowflake|AML/i);
+});
+
+test('applyTailoredResume falls back to source bullets when every reworded bullet is rejected', () => {
+  const tailored = applyTailoredResume(resume, {
+    experience: [{ ref: 0, bullets: ['Ran everything on AWS', 'Invented $999M of revenue'] }],
+  });
+  assert.deepEqual(tailored.experience[0].bullets, resume.experience[0].bullets);
+});
+
+test('applyTailoredResume rejects a fabricated summary, keeping the source summary', () => {
+  const tailored = applyTailoredResume(resume, {
+    summary: 'AML and Snowflake expert with $50M of delivered impact.',
+    experience: [],
+  });
+  assert.equal(tailored.summary, resume.summary);
 });

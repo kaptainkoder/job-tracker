@@ -31,6 +31,12 @@ const stubPlugin = {
     build.onResolve({ filter: /resumePdfText$/ }, () => ({
       path: path.resolve(root, 'test/stubs/resumePdfText.ts'),
     }));
+    build.onResolve({ filter: /resumePdfBrowser$/ }, () => ({
+      path: path.resolve(root, 'test/stubs/resumePdfBrowser.ts'),
+    }));
+    build.onResolve({ filter: /pdfPreviewCanvas$/ }, () => ({
+      path: path.resolve(root, 'test/stubs/pdfPreviewCanvas.ts'),
+    }));
   },
 };
 

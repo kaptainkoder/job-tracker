@@ -14,7 +14,11 @@
 import type { ChatMessage } from './llm.js';
 import type { PrivacyCategory } from './privacy.js';
 import { skillLabel, type SkillId } from './gap.js';
-import type { StructuredResume } from './resume.js';
+import {
+  buildStructuredResumeDocument,
+  flattenResumeText,
+  type StructuredResume,
+} from './resume.js';
 
 export type TailorAction = 'tailor' | 'cover' | 'prep';
 export const TAILOR_ACTIONS: readonly TailorAction[] = ['tailor', 'cover', 'prep'];
@@ -203,6 +207,15 @@ const STRUCTURED_TAILOR_SYSTEM = [
   'bullets within a role and roles relative to each other to surface the most JD-relevant first.',
   'You may NOT invent a role, award, school, skill, or number. Do not drop a role entirely.',
   '',
+  'Hard constraints for the rewording:',
+  '- Keep each bullet CONCISE — one short, single-line sentence. Lead with the action + the metric.',
+  '- Reword in the job’s vocabulary, but ONLY by inference grounded in the source bullet. Never name',
+  '  a tool, platform, or domain the candidate has not used (e.g. AWS, Snowflake, Azure, Databricks,',
+  '  Hadoop, Kafka, AML) — use only the candidate’s own stack.',
+  '- Keep every number EXACTLY as it appears in the source ($15M stays $15M, 41.25% stays 41.25%).',
+  '  Never introduce a new number or metric.',
+  '- Do not add Markdown emphasis; the renderer bolds key metrics and skills automatically.',
+  '',
   'Return ONLY a single JSON object (no prose, no Markdown, no code fence) of this exact shape:',
   '{',
   '  "summary": "<reworded summary, optional>",',
@@ -311,6 +324,73 @@ export function parseTailoredResumePatch(raw: string): TailoredResumePatch | nul
   return patch;
 }
 
+// --- B6.4-R grounded truthfulness guard ---------------------------------------------------------
+// The structural skeleton was already locked in applyTailoredResume; the gap closed here is the
+// free-form reworded TEXT (summary, scope, bullets), which the live recheck showed could smuggle in
+// JD-borrowed claims. The policy (decided with Karan, memory/b64r-truthfulness-grounded) is GROUNDED
+// inference, NOT literal-word matching: intelligent JD-driven rewording is wanted, so prose is
+// default-allowed. Only two things are hard-rejected per unit:
+//   (i)  a named FOREIGN tool/domain the candidate has never used (denylist, cross-checked so a
+//        listed skill or any corpus word is never denied), and
+//   (ii) an INVENTED number (a numeric token whose digit-core is absent from the source).
+// On reject, the unit falls back to the source text (a rejected bullet is dropped; a role left with
+// no surviving bullets keeps its source bullets). There is NO second LLM call — this is deterministic.
+
+// Foreign tools/domains the candidate does not use. Lowercased; matched whole-word. A term is only a
+// reject when it is NOT also present in the candidate's own skills/corpus (see buildAllowedTerms), so
+// adding a tool here can never deny something the résumé legitimately contains.
+export const FOREIGN_TECH_DENYLIST: readonly string[] = [
+  'aws', 'snowflake', 'azure', 'databricks', 'redshift', 'kafka', 'hadoop', 'aml',
+  'sagemaker', 'emr', 'athena', 'glue', 'kinesis', 'dynamodb', 'synapse',
+];
+
+const NUMERIC_TOKEN = /\d+(?:\.\d+)?/g;
+
+// Normalize a numeric token so "07" and "7", "1.80" and "1.8" compare equal.
+function normalizeNumber(token: string): string {
+  const n = Number.parseFloat(token);
+  return Number.isFinite(n) ? String(n) : token;
+}
+
+// Every numeric digit-core present anywhere in the source résumé (e.g. $15M→"15", 41.25%→"41.25",
+// 700K→"700", 1.1M→"1.1", 07/2025→"7"/"2025"). A reworded number must be a member of this set.
+export function buildResumeNumbers(source: StructuredResume): Set<string> {
+  const numbers = new Set<string>();
+  for (const str of flattenResumeText(buildStructuredResumeDocument(source))) {
+    for (const match of str.match(NUMERIC_TOKEN) ?? []) numbers.add(normalizeNumber(match));
+  }
+  return numbers;
+}
+
+// Every word that appears anywhere in the source (skills included via the flattened render trace).
+// Used to ensure a denylist term that the candidate legitimately uses is never rejected.
+function buildAllowedTerms(source: StructuredResume): Set<string> {
+  const allowed = new Set<string>();
+  for (const str of flattenResumeText(buildStructuredResumeDocument(source))) {
+    for (const word of str.toLowerCase().split(/[^a-z0-9+#]+/i)) {
+      if (word) allowed.add(word);
+    }
+  }
+  return allowed;
+}
+
+// The per-unit guard. Returns the text unchanged when it is grounded, or null to reject it.
+export function groundReword(text: string, numbers: Set<string>, allowed: Set<string>): string | null {
+  if (typeof text !== 'string') return null;
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  // (i) foreign tool/domain the candidate has never used.
+  for (const term of FOREIGN_TECH_DENYLIST) {
+    if (allowed.has(term)) continue;
+    if (new RegExp(`\\b${term}\\b`, 'i').test(trimmed)) return null;
+  }
+  // (ii) invented number — any numeric token not present in the source.
+  for (const match of trimmed.match(NUMERIC_TOKEN) ?? []) {
+    if (!numbers.has(normalizeNumber(match))) return null;
+  }
+  return text;
+}
+
 // Re-stitch a tailored patch onto the structured source, producing a new StructuredResume that the
 // deterministic renderer (createStructuredResumePdf) can draw. The truthfulness guarantee lives
 // HERE, not in the prompt: every structural fact (contact, awards, projects, education, skills, and
@@ -320,6 +400,9 @@ export function parseTailoredResumePatch(raw: string): TailoredResumePatch | nul
 // ever dropped (a role with no reworded bullets keeps its source bullets).
 export function applyTailoredResume(source: StructuredResume, patch: TailoredResumePatch): StructuredResume {
   const total = source.experience.length;
+  // The grounded text guard (B6.4-R): computed once from the source corpus.
+  const numbers = buildResumeNumbers(source);
+  const allowed = buildAllowedTerms(source);
 
   // Last write wins for a given ref; ignore refs outside the source range.
   const byRef = new Map<number, TailoredExperience>();
@@ -344,22 +427,32 @@ export function applyTailoredResume(source: StructuredResume, patch: TailoredRes
   const experience = order.map((i) => {
     const src = source.experience[i];
     const reworded = byRef.get(i);
-    const bullets = reworded
-      ? reworded.bullets.map((b) => b.trim()).filter(Boolean)
-      : src.bullets;
+    // Grounded guard: keep only reworded bullets that pass; drop the rest. If nothing survives the
+    // role keeps its source bullets, so a role is never emptied and no fabricated bullet renders.
+    const keptBullets = reworded
+      ? reworded.bullets
+          .map((b) => groundReword(b, numbers, allowed))
+          .filter((b): b is string => b !== null)
+          .map((b) => b.trim())
+          .filter(Boolean)
+      : [];
+    const rewordedScope =
+      reworded && typeof reworded.scope === 'string' && reworded.scope.trim()
+        ? groundReword(reworded.scope.trim(), numbers, allowed)
+        : null;
     return {
       ...src,
-      // Reword license: bullets, scope (only when provided + non-empty). Structure stays from source.
-      bullets: bullets.length ? bullets : src.bullets,
-      scope:
-        reworded && typeof reworded.scope === 'string' && reworded.scope.trim()
-          ? reworded.scope.trim()
-          : src.scope,
+      // Reword license: bullets, scope — only when grounded. Structure stays from source.
+      bullets: keptBullets.length ? keptBullets : src.bullets,
+      scope: rewordedScope ?? src.scope,
     };
   });
 
-  const summary =
-    typeof patch.summary === 'string' && patch.summary.trim() ? patch.summary.trim() : source.summary;
+  const rewordedSummary =
+    typeof patch.summary === 'string' && patch.summary.trim()
+      ? groundReword(patch.summary.trim(), numbers, allowed)
+      : null;
+  const summary = rewordedSummary ?? source.summary;
 
   // Everything except summary + experience is locked verbatim from the source.
   return {
