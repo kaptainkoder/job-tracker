@@ -14,12 +14,14 @@ import {
   computeGap,
   foldResolutions,
   resolveGap,
+  skillLabel,
   type FoldedResolutions,
   type SkillId,
 } from '../../shared/domain/gap';
 import {
   buildTailorMessages,
   buildTailorResumeMessages,
+  evidenceLikelyRecoverable,
   tailorStructuredResume,
   TAILOR_ACTIONS,
   TAILOR_ACTION_LABEL,
@@ -50,6 +52,7 @@ import { useAuth } from '../auth/AuthProvider';
 import { ModalShell } from '../tracker/ApplicationForm';
 import { DEFAULT_SETTINGS_FORM, modelLabel, settingsToForm } from '../settings/settings';
 import StructuredResumePreview from './StructuredResumePreview';
+import TailorReview from './TailorReview';
 import { insertTailorArtifact } from './tailorArtifacts';
 
 interface TailorFlowProps {
@@ -61,6 +64,9 @@ interface TailorFlowProps {
 interface DecisionDraft {
   confirmed: boolean;
   evidence: string;
+  /** G1: one optional focused follow-up — a number/scope the user can add when their evidence has
+   *  none yet. Folded into the evidence at generate time; declining it keeps the bullet factual. */
+  followUp?: string;
 }
 
 type DecisionDrafts = Partial<Record<SkillId, DecisionDraft>>;
@@ -197,7 +203,25 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
   }
 
   function updateEvidence(skill: SkillId, evidence: string) {
-    setDecisions((current) => ({ ...current, [skill]: { confirmed: true, evidence } }));
+    setDecisions((current) => ({
+      ...current,
+      [skill]: { confirmed: true, evidence, followUp: current[skill]?.followUp },
+    }));
+  }
+
+  function updateFollowUp(skill: SkillId, followUp: string) {
+    setDecisions((current) => ({
+      ...current,
+      [skill]: { confirmed: true, evidence: current[skill]?.evidence ?? '', followUp },
+    }));
+  }
+
+  // Fold the optional follow-up (a number/scope) into the evidence text so an evidence-derived bullet
+  // can ground it. Declining the follow-up leaves the evidence factual and unquantified (G1.3).
+  function mergedEvidence(draft: DecisionDraft | undefined): string {
+    const evidence = (draft?.evidence ?? '').trim();
+    const followUp = (draft?.followUp ?? '').trim();
+    return [evidence, followUp].filter(Boolean).join(' — ');
   }
 
   function finishGapStep() {
@@ -205,7 +229,7 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
     const folded = foldResolutions(gap.gaps.map((question) => resolveGap({
       skill: question.skill,
       confirmed: decisions[question.skill]?.confirmed ?? false,
-      evidence: decisions[question.skill]?.evidence,
+      evidence: mergedEvidence(decisions[question.skill]),
     })));
     setResolutions(folded);
     setStage('generating');
@@ -286,6 +310,8 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
               role: application.role,
               jdText: application.jd_text ?? '',
               resume: structuredResume as StructuredResume,
+              // G1: the confirmed + evidenced JD skills for this run — the model may fold them in.
+              truthfulAdditions: folded?.truthfulAdditions ?? [],
             })
           : buildTailorMessages(context),
         includedCategories: tailorIncludedCategories(context),
@@ -306,7 +332,13 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
       // deterministically; show the flattened, readable résumé text in the panel + Copy.
       let persistContent = content;
       if (structuredTailor) {
-        const tailored = tailorStructuredResume(structuredResume as StructuredResume, content);
+        const additions = folded?.truthfulAdditions ?? [];
+        const tailored = tailorStructuredResume(structuredResume as StructuredResume, content, {
+          // Evidence extends the grounding corpus so the user's own numbers/terms pass the guard;
+          // confirmed skill labels are added to the Skills section deterministically (G1).
+          evidence: additions.map((a) => a.evidence),
+          skills: additions.map((a) => skillLabel(a.skill)),
+        });
         setTailoredResume(tailored);
         persistContent = JSON.stringify(tailored);
         const readable = flattenResumeText(buildStructuredResumeDocument(tailored)).join('\n');
@@ -462,6 +494,21 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
                                 className="input mt-1.5 resize-y"
                                 placeholder="A concrete project, responsibility, or result—this becomes the evidence behind the claim."
                               />
+                              {evidenceLikelyRecoverable(decision.evidence) && (
+                                <div className="mt-2.5">
+                                  <label htmlFor={`followup-${question.skill}`} className="text-xs font-medium text-ink-soft">
+                                    Optional: a number or scope that makes this stronger? Leave blank to keep it factual.
+                                  </label>
+                                  <input
+                                    id={`followup-${question.skill}`}
+                                    type="text"
+                                    value={decision.followUp ?? ''}
+                                    onChange={(event) => updateFollowUp(question.skill, event.target.value)}
+                                    className="input mt-1.5"
+                                    placeholder="e.g. 30% fewer false positives, 5-person team, 2 years"
+                                  />
+                                </div>
+                              )}
                             </div>
                           )}
                           {decision && !decision.confirmed && (
@@ -541,6 +588,17 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
                     <Button size="sm" disabled={!tailoredResume} onClick={() => { setActiveTab('tailor'); setPdfOpen(true); }}><Download className="h-3.5 w-3.5" /> Download PDF</Button>
                   </div>
                 </div>
+
+                {activeTab === 'tailor' && resumeReady && tailoredResume && structuredResume && (
+                  <div className="mt-4">
+                    <TailorReview
+                      source={structuredResume}
+                      tailored={tailoredResume}
+                      unsupportedJd={(resolutions?.futureSuggestions ?? []).map((s) => skillLabel(s))}
+                      onChange={setTailoredResume}
+                    />
+                  </div>
+                )}
 
                 {activeTab === 'tailor' && !resumeReady ? (
                   <div className="mt-3 rounded-xl border border-line bg-surface p-5 shadow-card" role="tabpanel" aria-label="Tailored résumé result">

@@ -6,6 +6,8 @@ import {
   buildResumeNumbers,
   buildTailorMessages,
   buildTailorResumeMessages,
+  diffTailored,
+  evidenceLikelyRecoverable,
   FOREIGN_TECH_DENYLIST,
   groundReword,
   isTailorAction,
@@ -403,4 +405,114 @@ test('applyTailoredResume rejects a fabricated summary, keeping the source summa
     experience: [],
   });
   assert.equal(tailored.summary, resume.summary);
+});
+
+// ================================================================================================
+// G1 — evidence-ingesting tailoring (confirmed skills → Skills; evidence-derived bullets stay
+// grounded; one focused follow-up only when a quantity is recoverable). 2026-06-30 gap wave.
+// ================================================================================================
+
+test('G1.1 a confirmed skill enters Skills; an unconfirmed JD skill never appears', () => {
+  const tailored = applyTailoredResume(resume, { experience: [] }, { skills: ['Kubernetes'] });
+  const flat = flattenResumeText(buildStructuredResumeDocument(tailored)).join('\n').toLowerCase();
+  assert.match(flat, /kubernetes/); // confirmed + evidenced → folded into Skills
+  assert.doesNotMatch(flat, /terraform/); // never confirmed → never injected
+  // Deterministic + idempotent: a skill already present is not duplicated.
+  const again = applyTailoredResume(resume, { experience: [] }, { skills: ['Python', 'Kubernetes'] });
+  const pythonCount = flattenResumeText(buildStructuredResumeDocument(again))
+    .filter((s) => s.toLowerCase() === 'python').length;
+  assert.equal(pythonCount, 1);
+});
+
+test('G1.2 an evidence-derived bullet passes the guard; a fabricated metric is rejected', () => {
+  const evidence = ['Cut fraud false positives 30% by deploying a gradient boosting model'];
+  const grounded = applyTailoredResume(
+    resume,
+    { experience: [{ ref: 0, bullets: ['Cut fraud false positives 30% with a gradient boosting model'] }] },
+    { evidence },
+  );
+  assert.match(grounded.experience[0].bullets.join(' '), /30%/); // grounded by the user's evidence
+
+  // Without the evidence corpus the same 30% bullet is NOT grounded (number absent from source) →
+  // the role falls back to its source bullets rather than rendering an ungrounded claim.
+  const ungrounded = applyTailoredResume(resume, {
+    experience: [{ ref: 0, bullets: ['Cut fraud false positives 30% with a gradient boosting model'] }],
+  });
+  assert.doesNotMatch(ungrounded.experience[0].bullets.join(' '), /30% with a gradient/);
+
+  // A fabricated metric absent from BOTH source and evidence is rejected even when evidence is present.
+  const fabricated = applyTailoredResume(
+    resume,
+    { experience: [{ ref: 0, bullets: ['Cut fraud false positives 90% overnight'] }] },
+    { evidence },
+  );
+  assert.doesNotMatch(fabricated.experience[0].bullets.join(' '), /90%/);
+});
+
+test('G1.3 the focused follow-up fires only on quantity-less evidence; declining stays factual', () => {
+  assert.equal(evidenceLikelyRecoverable('Led the migration to a feature store'), true);
+  assert.equal(evidenceLikelyRecoverable('Cut latency by 40%'), false);
+  assert.equal(evidenceLikelyRecoverable('   '), false);
+  // Declining the follow-up: a factual, unquantified bullet stays grounded — no fabricated precision.
+  const tailored = applyTailoredResume(
+    resume,
+    { experience: [{ ref: 0, bullets: ['Led the migration to a feature store for real-time scoring'] }] },
+    { evidence: ['Led the migration to a feature store'] },
+  );
+  assert.match(tailored.experience[0].bullets.join(' '), /feature store/);
+});
+
+// ================================================================================================
+// G3 — pre-save tailoring diff (additions / rewrites / omissions / unsupported JD; restore parity).
+// ================================================================================================
+
+test('G3.1 diffTailored surfaces a summary rewrite, a new skill, and a per-role bullet change', () => {
+  const tailored = applyTailoredResume(
+    resume,
+    {
+      summary: 'Reworded summary for the target role.',
+      experience: [{ ref: 0, bullets: ['Owned validators across pipelines for regulatory reporting'] }],
+    },
+    { skills: ['Kubernetes'] },
+  );
+  const diff = diffTailored(resume, tailored, { unsupportedJd: ['Terraform'] });
+  assert.equal(diff.unchanged, false);
+  assert.equal(diff.summary?.after, 'Reworded summary for the target role.');
+  assert.equal(diff.summary?.before, resume.summary);
+  assert.ok(diff.skillAdditions.includes('Kubernetes'));
+  const role0 = diff.roles.find((r) => r.org === resume.experience[0].org && r.title === resume.experience[0].title);
+  assert.ok(role0);
+  assert.deepEqual(role0!.before, resume.experience[0].bullets); // restore target = the source bullets
+  assert.deepEqual(diff.unsupportedJd, ['Terraform']);
+});
+
+test('G3.2 a tailored result identical to source reports no changes (restore parity)', () => {
+  const diff = diffTailored(resume, resume);
+  assert.equal(diff.unchanged, true);
+  assert.equal(diff.summary, null);
+  assert.deepEqual(diff.skillAdditions, []);
+  assert.deepEqual(diff.roles, []);
+});
+
+test('diffTailored shows a dropped bullet as a shorter after-set (omission is visible)', () => {
+  const firstOnly = [resume.experience[0].bullets[0]]; // verbatim source bullet → passes the guard
+  const tailored = applyTailoredResume(resume, { experience: [{ ref: 0, bullets: firstOnly }] });
+  const diff = diffTailored(resume, tailored);
+  const role0 = diff.roles.find((r) => r.org === resume.experience[0].org && r.title === resume.experience[0].title);
+  assert.ok(role0);
+  assert.ok(role0!.before.length > role0!.after.length);
+});
+
+test('buildTailorResumeMessages surfaces confirmed truthful additions to the model', () => {
+  const messages = buildTailorResumeMessages({
+    company: 'Acme',
+    role: 'ML Platform Engineer',
+    jdText: 'Kubernetes in production',
+    resume,
+    truthfulAdditions: [{ skill: 'kubernetes', evidence: 'Ran prod workloads on k8s for two years' }],
+  });
+  const user = messages.find((m) => m.role === 'user');
+  assert.ok(user);
+  assert.match(user!.content, /Confirmed truthful additions/);
+  assert.match(user!.content, /Kubernetes: Ran prod workloads on k8s/);
 });

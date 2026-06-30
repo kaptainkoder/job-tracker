@@ -17,6 +17,7 @@ import { skillLabel, type SkillId } from './gap.js';
 import {
   buildStructuredResumeDocument,
   flattenResumeText,
+  type ResumeSkillGroup,
   type StructuredResume,
 } from './resume.js';
 
@@ -193,27 +194,44 @@ export interface TailorResumeContext {
   jdText: string;
   /** The confirmed structured résumé — the ONLY truthful source for the tailored output. */
   resume: StructuredResume;
+  /**
+   * B2 foldResolutions().truthfulAdditions for this run — JD skills the user confirmed AND backed
+   * with their own usage evidence (G1). The model MAY surface these as a new Skills entry and, when
+   * the evidence describes concrete usage of a specific role, as at most one concise bullet on that
+   * role. The evidence text is itself a truthful source; everything else stays reword/reorder-only.
+   */
+  truthfulAdditions?: readonly { skill: SkillId; evidence: string }[];
 }
 
-// Hard contract for the structured `tailor` action: reword/reorder only, JSON only, no new facts.
+// Hard contract for the structured `tailor` action: reword/reorder + ground evidence-backed
+// additions, JSON only, no new facts beyond the source résumé and the confirmed evidence.
 const STRUCTURED_TAILOR_SYSTEM = [
   NO_FABRICATION_SYSTEM,
   '',
-  'You are given the candidate’s résumé as structured JSON — the ONLY truthful source.',
-  'Your job is to REWORD and REORDER existing material toward the target job, in the job’s',
-  'vocabulary, WITHOUT adding any fact, skill, employer, title, date, metric, or credential that is',
-  'not already present in the source bullet you are rewording. You may rephrase the summary and the',
-  'experience bullets, tighten a scope line, drop a bullet that is irrelevant to the job, and reorder',
-  'bullets within a role and roles relative to each other to surface the most JD-relevant first.',
+  'You are given the candidate’s résumé as structured JSON — the ONLY truthful source, plus an',
+  'optional list of CONFIRMED TRUTHFUL ADDITIONS: skills the candidate has confirmed and backed with',
+  'their own usage evidence. Your job is to REWORD and REORDER existing material toward the target',
+  'job, in the job’s vocabulary, and to truthfully fold in the confirmed additions, WITHOUT adding any',
+  'fact, skill, employer, title, date, metric, or credential that is not already present in the source',
+  'résumé OR in a confirmed addition’s evidence. You may rephrase the summary and the experience',
+  'bullets, tighten a scope line, drop a bullet that is irrelevant to the job, and reorder bullets',
+  'within a role and roles relative to each other to surface the most JD-relevant first.',
   'You may NOT invent a role, award, school, skill, or number. Do not drop a role entirely.',
+  '',
+  'Confirmed truthful additions (when present):',
+  '- A confirmed skill may be named in a reworded bullet ONLY when its evidence describes using it.',
+  '- You MAY add at most ONE concise bullet to the single MOST RELEVANT existing role to capture a',
+  '  confirmed addition, derived ONLY from that addition’s evidence — never invent scope, metric, or',
+  '  outcome the evidence does not state. If the evidence is thin, prefer no bullet over a padded one.',
+  '- The Skills section itself is added deterministically by the app; do not restate skill lists.',
   '',
   'Hard constraints for the rewording:',
   '- Keep each bullet CONCISE — one short, single-line sentence. Lead with the action + the metric.',
-  '- Reword in the job’s vocabulary, but ONLY by inference grounded in the source bullet. Never name',
-  '  a tool, platform, or domain the candidate has not used (e.g. AWS, Snowflake, Azure, Databricks,',
-  '  Hadoop, Kafka, AML) — use only the candidate’s own stack.',
-  '- Keep every number EXACTLY as it appears in the source ($15M stays $15M, 41.25% stays 41.25%).',
-  '  Never introduce a new number or metric.',
+  '- Reword in the job’s vocabulary, but ONLY by inference grounded in the source bullet or evidence.',
+  '  Never name a tool, platform, or domain the candidate has not used (e.g. AWS, Snowflake, Azure,',
+  '  Databricks, Hadoop, Kafka, AML) — use only the candidate’s own stack.',
+  '- Keep every number EXACTLY as it appears in the source or evidence ($15M stays $15M, 41.25% stays',
+  '  41.25%). Never introduce a new number or metric.',
   '- Do not add Markdown emphasis; the renderer bolds key metrics and skills automatically.',
   '',
   'Return ONLY a single JSON object (no prose, no Markdown, no code fence) of this exact shape:',
@@ -254,6 +272,11 @@ function renderResumeForTailoring(resume: StructuredResume): string {
 // the prose path (JD + profile/work/skills, no contact-info) but asks for a JSON reword/reorder
 // patch instead of free Markdown.
 export function buildTailorResumeMessages(ctx: TailorResumeContext): ChatMessage[] {
+  const additions =
+    (ctx.truthfulAdditions ?? [])
+      .map((a) => `- ${skillLabel(a.skill)}: ${a.evidence}`)
+      .join('\n') || '(none)';
+
   const userContent = [
     `Company: ${ctx.company || '(unspecified)'}`,
     `Role: ${ctx.role || '(unspecified)'}`,
@@ -263,6 +286,10 @@ export function buildTailorResumeMessages(ctx: TailorResumeContext): ChatMessage
     '',
     'Candidate résumé (structured, the ONLY truthful source — reword/reorder, never go beyond it):',
     renderResumeForTailoring(ctx.resume),
+    '',
+    'Confirmed truthful additions (skill: the candidate’s own usage evidence — safe to fold in per',
+    'the rules above; the evidence text is a truthful source for any bullet you derive from it):',
+    additions,
     '',
     'Return the JSON patch described in the system message. Reword toward this job; invent nothing.',
   ].join('\n');
@@ -354,19 +381,24 @@ function normalizeNumber(token: string): string {
 
 // Every numeric digit-core present anywhere in the source résumé (e.g. $15M→"15", 41.25%→"41.25",
 // 700K→"700", 1.1M→"1.1", 07/2025→"7"/"2025"). A reworded number must be a member of this set.
-export function buildResumeNumbers(source: StructuredResume): Set<string> {
+// `extra` (G1) carries the user's confirmed evidence strings so a number the candidate actually
+// supplied (e.g. "cut false positives 30%") is grounded and not rejected as invented.
+export function buildResumeNumbers(source: StructuredResume, extra: readonly string[] = []): Set<string> {
   const numbers = new Set<string>();
-  for (const str of flattenResumeText(buildStructuredResumeDocument(source))) {
+  const strings = [...flattenResumeText(buildStructuredResumeDocument(source)), ...extra];
+  for (const str of strings) {
     for (const match of str.match(NUMERIC_TOKEN) ?? []) numbers.add(normalizeNumber(match));
   }
   return numbers;
 }
 
 // Every word that appears anywhere in the source (skills included via the flattened render trace).
-// Used to ensure a denylist term that the candidate legitimately uses is never rejected.
-function buildAllowedTerms(source: StructuredResume): Set<string> {
+// Used to ensure a denylist term that the candidate legitimately uses is never rejected. `extra`
+// (G1) adds the confirmed evidence/skill words so an evidence-derived bullet is grounded.
+function buildAllowedTerms(source: StructuredResume, extra: readonly string[] = []): Set<string> {
   const allowed = new Set<string>();
-  for (const str of flattenResumeText(buildStructuredResumeDocument(source))) {
+  const strings = [...flattenResumeText(buildStructuredResumeDocument(source)), ...extra];
+  for (const str of strings) {
     for (const word of str.toLowerCase().split(/[^a-z0-9+#]+/i)) {
       if (word) allowed.add(word);
     }
@@ -398,11 +430,46 @@ export function groundReword(text: string, numbers: Set<string>, allowed: Set<st
 // only influence the summary text, each role's bullet wording/order, the scope line, and the order
 // of roles. An out-of-range `ref` or a non-permutation `experienceOrder` is ignored, and no role is
 // ever dropped (a role with no reworded bullets keeps its source bullets).
-export function applyTailoredResume(source: StructuredResume, patch: TailoredResumePatch): StructuredResume {
+// G1 ingestion options: the user's confirmed truthful additions for this run. `evidence` strings
+// extend the grounding corpus (so an evidence-derived bullet's numbers/terms pass groundReword);
+// `skills` are the confirmed JD-skill labels, added to the Skills section DETERMINISTICALLY (never
+// taken from the model), so a skill is claimed only because the user confirmed and evidenced it.
+export interface TailorIngestOptions {
+  evidence?: readonly string[];
+  skills?: readonly string[];
+}
+
+// Append confirmed JD skills the candidate evidenced (G1) into the Skills section, skipping any term
+// already present anywhere in skills (case-insensitive). Added to the first existing group, or a new
+// unlabelled group when the source had none. Pure; only the user-confirmed labels are ever added.
+function mergeConfirmedSkills(skills: ResumeSkillGroup[], confirmed: readonly string[]): ResumeSkillGroup[] {
+  const wanted = confirmed.map((s) => s.trim()).filter(Boolean);
+  if (!wanted.length) return skills;
+  const present = new Set<string>();
+  for (const group of skills) for (const item of group.items) present.add(item.trim().toLowerCase());
+  const fresh: string[] = [];
+  for (const label of wanted) {
+    const key = label.toLowerCase();
+    if (present.has(key)) continue;
+    present.add(key);
+    fresh.push(label);
+  }
+  if (!fresh.length) return skills;
+  if (!skills.length) return [{ items: fresh }];
+  return skills.map((group, i) => (i === 0 ? { ...group, items: [...group.items, ...fresh] } : group));
+}
+
+export function applyTailoredResume(
+  source: StructuredResume,
+  patch: TailoredResumePatch,
+  opts: TailorIngestOptions = {},
+): StructuredResume {
   const total = source.experience.length;
-  // The grounded text guard (B6.4-R): computed once from the source corpus.
-  const numbers = buildResumeNumbers(source);
-  const allowed = buildAllowedTerms(source);
+  // The grounded text guard (B6.4-R): computed once from the source corpus, extended (G1) with the
+  // user's confirmed evidence so an evidence-derived bullet is not falsely rejected as invented.
+  const evidenceCorpus = opts.evidence ?? [];
+  const numbers = buildResumeNumbers(source, evidenceCorpus);
+  const allowed = buildAllowedTerms(source, evidenceCorpus);
 
   // Last write wins for a given ref; ignore refs outside the source range.
   const byRef = new Map<number, TailoredExperience>();
@@ -454,7 +521,7 @@ export function applyTailoredResume(source: StructuredResume, patch: TailoredRes
       : null;
   const summary = rewordedSummary ?? source.summary;
 
-  // Everything except summary + experience is locked verbatim from the source.
+  // Everything except summary + experience + (G1) confirmed-skill additions is locked verbatim.
   return {
     contact: source.contact,
     summary,
@@ -462,14 +529,105 @@ export function applyTailoredResume(source: StructuredResume, patch: TailoredRes
     experience,
     projects: source.projects,
     education: source.education,
-    skills: source.skills,
+    skills: mergeConfirmedSkills(source.skills, opts.skills ?? []),
   };
 }
 
 // Convenience: parse the model's raw output and apply it, falling back to the un-tailored source
 // when the patch is unusable. Always returns a renderable StructuredResume (createStructuredResumePdf
 // input), so the format-faithful download path never breaks on a bad model response.
-export function tailorStructuredResume(source: StructuredResume, raw: string): StructuredResume {
+export function tailorStructuredResume(
+  source: StructuredResume,
+  raw: string,
+  opts: TailorIngestOptions = {},
+): StructuredResume {
   const patch = parseTailoredResumePatch(raw);
-  return patch ? applyTailoredResume(source, patch) : source;
+  // Even when the model patch is unusable, still fold in the deterministic confirmed-skill additions
+  // so a user who confirmed a JD skill always sees it, independent of the reword/reorder result.
+  return applyTailoredResume(source, patch ?? { experience: [] }, opts);
+}
+
+// --- G1 focused follow-up -----------------------------------------------------------------------
+// One focused follow-up is offered (AC3/G1.3) only when a meaningful number or scope is likely
+// RECOVERABLE from the user — i.e. their evidence reads like real usage but carries no quantity yet.
+// Declining proceeds factually (no fabricated precision). Heuristic, deterministic, and testable:
+// recoverable ⇔ non-empty evidence that contains no numeric token. Evidence that already states a
+// number needs no prompt; blank evidence is not a truthful addition at all.
+export function evidenceLikelyRecoverable(evidence: string): boolean {
+  if (typeof evidence !== 'string') return false;
+  const trimmed = evidence.trim();
+  if (!trimmed) return false;
+  // Non-global digit test — NUMERIC_TOKEN carries /g, whose .test() is stateful (lastIndex).
+  return !/\d/.test(trimmed);
+}
+
+// --- G3 pre-save tailoring diff -----------------------------------------------------------------
+// Before anything is saved or rendered, the user is shown exactly what tailoring changed and can
+// restore/edit it. The diff is computed from the two FINAL résumés (source vs applied tailored) so
+// it always matches what the preview==download path will render — no separate model trust. Roles are
+// matched by their LOCKED structural key (org+title+dates), because applyTailoredResume may reorder
+// roles; index matching would misalign. Per matched role we surface the before→after bullet sets,
+// from which the UI reads rewrites (changed lines), additions (extra after-lines, e.g. an evidence
+// bullet), and omissions (before-lines with no after counterpart). Summary changes and new Skills
+// are surfaced separately. `unsupportedJd` carries the JD skills the user could not evidence
+// (foldResolutions().futureSuggestions) so the review can show what was deliberately NOT claimed.
+
+export interface TailorRoleDiff {
+  /** Structural identity of the role (locked from source), for display + restore keying. */
+  org: string;
+  title: string;
+  before: string[];
+  after: string[];
+}
+
+export interface TailorDiff {
+  summary: { before: string; after: string } | null;
+  skillAdditions: string[];
+  roles: TailorRoleDiff[];
+  unsupportedJd: string[];
+  /** True when nothing changed — the review can show a calm "no changes" state. */
+  unchanged: boolean;
+}
+
+function roleKey(exp: { org: string; title: string; start: string; end: string }): string {
+  return [exp.org, exp.title, exp.start, exp.end].map((s) => (s ?? '').trim().toLowerCase()).join('|');
+}
+
+function lowerSet(items: readonly string[]): Set<string> {
+  return new Set(items.map((s) => s.trim().toLowerCase()).filter(Boolean));
+}
+
+export function diffTailored(
+  source: StructuredResume,
+  tailored: StructuredResume,
+  opts: { unsupportedJd?: readonly string[] } = {},
+): TailorDiff {
+  const summary =
+    source.summary.trim() !== tailored.summary.trim()
+      ? { before: source.summary, after: tailored.summary }
+      : null;
+
+  // New Skills items: present in tailored, absent from source (case-insensitive, across all groups).
+  const sourceSkills = lowerSet(source.skills.flatMap((g) => g.items));
+  const skillAdditions: string[] = [];
+  for (const item of tailored.skills.flatMap((g) => g.items)) {
+    const key = item.trim().toLowerCase();
+    if (key && !sourceSkills.has(key)) skillAdditions.push(item.trim());
+  }
+
+  // Per-role before→after, matched by locked structural key; only roles whose bullets changed.
+  const tailoredByKey = new Map<string, string[]>();
+  for (const exp of tailored.experience) tailoredByKey.set(roleKey(exp), exp.bullets);
+  const roles: TailorRoleDiff[] = [];
+  for (const src of source.experience) {
+    const after = tailoredByKey.get(roleKey(src));
+    if (!after) continue; // role always preserved, but guard defensively
+    const changed = src.bullets.length !== after.length
+      || src.bullets.some((b, i) => b.trim() !== (after[i] ?? '').trim());
+    if (changed) roles.push({ org: src.org, title: src.title, before: src.bullets, after });
+  }
+
+  const unsupportedJd = [...(opts.unsupportedJd ?? [])].map((s) => s.trim()).filter(Boolean);
+  const unchanged = !summary && skillAdditions.length === 0 && roles.length === 0;
+  return { summary, skillAdditions, roles, unsupportedJd, unchanged };
 }
