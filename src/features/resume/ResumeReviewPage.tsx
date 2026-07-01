@@ -771,10 +771,10 @@ function Header({
   const meta = metaLine([contact.location, contact.email, contact.phone]);
   return (
     <div>
-      <p className="text-2xs font-semibold uppercase tracking-[0.16em] text-accent">Résumé · source of truth</p>
+      <p className="text-2xs font-semibold uppercase tracking-[0.16em] text-accent">Profile · source of truth</p>
       <div className="mt-1 flex items-start justify-between gap-3">
         <div>
-          <h1 className="text-h1 font-semibold text-ink">{contact.fullName || 'Your résumé'}</h1>
+          <h1 className="text-h1 font-semibold text-ink">{contact.fullName || 'Your profile'}</h1>
           {contact.title && <p className="mt-0.5 text-sm text-ink-soft">{contact.title}</p>}
           {(meta || contact.links.length > 0) && (
             <p className="mt-1 text-sm text-ink-faint">
@@ -1169,12 +1169,42 @@ function EmptyState({
   return (
     <div className="animate-rise mx-auto max-w-reading space-y-6">
       <div>
-        <p className="text-2xs font-semibold uppercase tracking-[0.16em] text-accent">Résumé · source of truth</p>
-        <h1 className="mt-1 text-h1 font-semibold text-ink">Review your résumé</h1>
+        <p className="text-2xs font-semibold uppercase tracking-[0.16em] text-accent">Profile · source of truth</p>
+        <h1 className="mt-1 text-h1 font-semibold text-ink">Set up your profile</h1>
         <p className="mt-1 text-sm leading-6 text-ink-soft">
           Parse your résumé once into a structured profile you can confirm and correct. Tailoring then
           rewords only what’s here — it never invents experience.
         </p>
+      </div>
+
+      {/* One-time setup flow — the "do this once" highlight Karan asked for. */}
+      <div className="card border-line-soft bg-surface-2/40 p-5">
+        <p className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-[0.16em] text-accent">
+          <FileText className="h-3.5 w-3.5" />Set up once — how it works
+        </p>
+        <ol className="mt-3 space-y-2.5 text-sm text-ink-soft">
+          {[
+            <>
+              <span className="font-medium text-ink">Upload your résumé PDF.</span> It’s read in your
+              browser; only the extracted text is sent, with no-log routing (audited in your Privacy Log).
+            </>,
+            <>
+              <span className="font-medium text-ink">Review the parsed sections.</span> Contact, summary,
+              experience, education, skills, awards and projects — edit anything that’s off, add anything missing.
+            </>,
+            <>
+              <span className="font-medium text-ink">Save.</span> This becomes your source of truth.
+              Tailoring rewords only what’s here. You only redo this when your résumé actually changes.
+            </>,
+          ].map((step, index) => (
+            <li key={index} className="flex gap-2.5">
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-soft text-2xs font-semibold text-accent">
+                {index + 1}
+              </span>
+              <span className="leading-6">{step}</span>
+            </li>
+          ))}
+        </ol>
       </div>
 
       <section className="card p-6">
