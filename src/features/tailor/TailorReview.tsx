@@ -155,6 +155,16 @@ export default function TailorReview({ source, tailored, unsupportedJd, onChange
         </div>
       )}
 
+      {diff.omittedOptional.length > 0 && (
+        <div className="mt-4 border-t border-line-soft pt-3">
+          <span className="text-xs font-semibold uppercase tracking-wide text-ink-faint">Removed to fit one page</span>
+          <p className="mt-1 text-xs leading-5 text-ink-soft">
+            Less-relevant optional content was pruned so your experience gets the page (every role and
+            school is kept): {diff.omittedOptional.join(', ')}. Use “Restore original” to bring it back.
+          </p>
+        </div>
+      )}
+
       {diff.unsupportedJd.length > 0 && (
         <div className="mt-4 border-t border-line-soft pt-3">
           <span className="text-xs font-semibold uppercase tracking-wide text-ink-faint">Asked by the job, left unclaimed</span>

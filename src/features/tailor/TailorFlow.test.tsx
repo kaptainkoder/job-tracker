@@ -9,7 +9,8 @@ interface TestGlobals {
   __DOM_TESTS_DONE__?: boolean;
   __LLM_CALLS__: Array<{ action: string }>;
   __SUPABASE_INSERTS__: Array<Record<string, unknown>>;
-  __SUPABASE_ROWS__: Record<string, unknown>;
+  __SUPABASE_UPDATES__: Array<Record<string, unknown>>;
+  __SUPABASE_ROWS__: Record<string, ({ content?: unknown } & Record<string, unknown>) | null>;
   __COPIED_TEXT__?: string;
 }
 const globals = globalThis as unknown as TestGlobals;
@@ -216,6 +217,40 @@ async function main() {
     } finally {
       globals.__SUPABASE_ROWS__.resume_structured = savedResume;
     }
+  });
+
+  await test('G3-persist: restoring in the review re-persists the source résumé byte-for-byte', async () => {
+    globals.__LLM_CALLS__.length = 0;
+    globals.__SUPABASE_INSERTS__.length = 0;
+    globals.__SUPABASE_UPDATES__.length = 0;
+    const cleanup = await mount();
+
+    await act(async () => click('Review privacy & continue'));
+    await act(async () => click('Not in my experience'));
+    await act(async () => click('Generate the kit'));
+    await act(async () => click('Approve & send'));
+    await waitForText(/Cover letter sends a request/);
+    await act(async () => click('Approve & send'));
+    await waitForText(/Interview prep sends a request/);
+    await act(async () => click('Approve & send'));
+    await waitForText(/Your saved tailoring kit/i);
+
+    // The tailor tab is active; the review shows the reworded bullet as a change, so restore is live.
+    assert.match(document.body.textContent ?? '', /What tailoring changed/i);
+    // No re-persist has fired yet — the initial save at generation is the only write so far.
+    assert.equal(globals.__SUPABASE_UPDATES__.length, 0, 'no edit yet ⇒ no re-persist');
+
+    await act(async () => click('Restore original'));
+
+    // Restoring re-persists onto the SAME artifact row, byte-equal to the confirmed source résumé.
+    assert.ok(globals.__SUPABASE_UPDATES__.length >= 1, 'restore must re-persist the edit');
+    const last = globals.__SUPABASE_UPDATES__[globals.__SUPABASE_UPDATES__.length - 1];
+    const persisted = JSON.parse(String(last.content));
+    const source = globals.__SUPABASE_ROWS__.resume_structured?.content;
+    assert.deepEqual(persisted, source, 'restored tailored résumé equals the source byte-for-byte');
+    // The review now reports no outstanding changes (preview == download == saved).
+    assert.match(document.body.textContent ?? '', /nothing was added, reworded, or dropped/i);
+    await cleanup();
   });
 
   globals.__DOM_TESTS_DONE__ = true;

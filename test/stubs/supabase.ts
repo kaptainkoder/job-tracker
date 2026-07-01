@@ -4,6 +4,8 @@
 // tsconfig include) — kept intentionally loose to mirror the chained query builder.
 const inserts = [];
 globalThis.__SUPABASE_INSERTS__ = inserts;
+const updates = [];
+globalThis.__SUPABASE_UPDATES__ = updates;
 globalThis.__SUPABASE_ROWS__ = {
   profile: {
     id: 'user-1',
@@ -68,7 +70,8 @@ function makeBuilder(table) {
     eq() {
       return builder;
     },
-    update() {
+    update(payload) {
+      updates.push(payload);
       return builder;
     },
     delete() {

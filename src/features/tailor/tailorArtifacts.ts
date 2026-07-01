@@ -51,3 +51,21 @@ export async function insertTailorArtifact(input: ArtifactInsertInput): Promise<
   if (error || !data) throw new Error(error?.message ?? 'Artifact insert returned no row.');
   return data as Artifact;
 }
+
+// G3-persistence: the tailored-résumé artifact is saved at generation, but the pre-download review
+// lets the user restore/edit the tailored StructuredResume. This re-persists those edits onto the
+// SAME row so the stored artifact always equals what the preview renders and the PDF downloads
+// (preview == download == saved). Owner scoping is enforced by RLS; the id already came from an
+// owner-scoped insert this session.
+export interface ArtifactUpdateInput {
+  artifactId: string;
+  content: string;
+}
+
+export async function updateTailorArtifact(input: ArtifactUpdateInput): Promise<void> {
+  const { error } = await supabase
+    .from('artifacts')
+    .update({ content: input.content })
+    .eq('id', input.artifactId);
+  if (error) throw new Error(error.message);
+}

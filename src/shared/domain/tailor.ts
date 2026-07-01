@@ -13,7 +13,7 @@
 // function bundle. TypeScript maps them back to the .ts sources during local builds.
 import type { ChatMessage } from './llm.js';
 import type { PrivacyCategory } from './privacy.js';
-import { skillLabel, type SkillId } from './gap.js';
+import { skillLabel, type GapResult, type SkillId } from './gap.js';
 import {
   buildStructuredResumeDocument,
   flattenResumeText,
@@ -201,6 +201,13 @@ export interface TailorResumeContext {
    * role. The evidence text is itself a truthful source; everything else stays reword/reorder-only.
    */
   truthfulAdditions?: readonly { skill: SkillId; evidence: string }[];
+  /**
+   * G2 adaptive summary: when true the candidate already closely matches this role, so the model is
+   * told to keep the summary to at most one crisp line (or omit it) and let the experience bullets
+   * take the page; when false/undefined this is an adjacent/stretch move and the summary is kept
+   * brief but bridge-explaining. Derived deterministically from computeGap via `isCloseFit`.
+   */
+  closeFit?: boolean;
 }
 
 // Hard contract for the structured `tailor` action: reword/reorder + ground evidence-backed
@@ -290,6 +297,12 @@ export function buildTailorResumeMessages(ctx: TailorResumeContext): ChatMessage
     'Confirmed truthful additions (skill: the candidate’s own usage evidence — safe to fold in per',
     'the rules above; the evidence text is a truthful source for any bullet you derive from it):',
     additions,
+    '',
+    ctx.closeFit
+      ? 'Summary guidance: the candidate already closely matches this role. Keep the summary to at most ' +
+        'one crisp line, or omit it entirely, so the experience bullets get the page.'
+      : 'Summary guidance: this is an adjacent/stretch move. Keep a brief 1–2 line summary that honestly ' +
+        'bridges the candidate’s real background to this role (transferable strengths), inventing nothing.',
     '',
     'Return the JSON patch described in the system message. Reword toward this job; invent nothing.',
   ].join('\n');
@@ -584,6 +597,9 @@ export interface TailorDiff {
   summary: { before: string; after: string } | null;
   skillAdditions: string[];
   roles: TailorRoleDiff[];
+  /** G2: optional content (awards / projects / skills) present in the source but pruned for
+   *  relevance to hold one page. Surfaced so the pruning is transparent and reversible (restore). */
+  omittedOptional: string[];
   unsupportedJd: string[];
   /** True when nothing changed — the review can show a calm "no changes" state. */
   unchanged: boolean;
@@ -627,7 +643,176 @@ export function diffTailored(
     if (changed) roles.push({ org: src.org, title: src.title, before: src.bullets, after });
   }
 
+  // Optional content dropped by G2 relevance pruning: awards/projects/skills present in the source
+  // but absent from the tailored résumé. (Employment + education are never touched, so they can
+  // never appear here.) These are reversible via "Restore original".
+  const tailoredAwards = lowerSet(tailored.awards.map((a) => a.title));
+  const tailoredProjects = lowerSet(tailored.projects.map((p) => p.name));
+  const tailoredSkills = lowerSet(tailored.skills.flatMap((g) => g.items));
+  const omittedOptional: string[] = [];
+  for (const a of source.awards) {
+    const label = a.title.trim();
+    if (label && !tailoredAwards.has(label.toLowerCase())) omittedOptional.push(label);
+  }
+  for (const p of source.projects) {
+    const label = p.name.trim();
+    if (label && !tailoredProjects.has(label.toLowerCase())) omittedOptional.push(label);
+  }
+  for (const item of source.skills.flatMap((g) => g.items)) {
+    const label = item.trim();
+    if (label && !tailoredSkills.has(label.toLowerCase())) omittedOptional.push(label);
+  }
+
   const unsupportedJd = [...(opts.unsupportedJd ?? [])].map((s) => s.trim()).filter(Boolean);
-  const unchanged = !summary && skillAdditions.length === 0 && roles.length === 0;
-  return { summary, skillAdditions, roles, unsupportedJd, unchanged };
+  const unchanged =
+    !summary && skillAdditions.length === 0 && roles.length === 0 && omittedOptional.length === 0;
+  return { summary, skillAdditions, roles, omittedOptional, unsupportedJd, unchanged };
+}
+
+// --- G2 relevance-based one-page selection + close-fit signal -----------------------------------
+// Within the one-page budget the tailored résumé prunes/combines the LESS-relevant OPTIONAL content
+// (skills, projects, awards) by JD relevance and adapts the summary — while keeping the FULL
+// employment + education chronology intact (never a dropped role or school). The renderer already
+// auto-fits to one A4 page by scaling text down; this selector is what lets the type stay legible
+// (prune low-value content instead of shrinking everything) and gives the experience bullets the
+// page on a close-fit role. Pure + deterministic so it stays shared with the api/ path (no jsPDF).
+
+// A deterministic, explainable close-fit signal derived from computeGap (no model call). "Close fit"
+// = the candidate already evidences (nearly) everything the JD requires, so the professional summary
+// can be tightened/omitted to give the experience bullets the page; a stretch/pivot (many unmet
+// requirements) keeps a bridge-explaining summary. Threshold: evidences ≥ 80% of the required
+// skills. An unrecognised JD (no required skills extracted) is treated as NOT a confident close fit,
+// so the honest bridge summary is preserved rather than dropped on thin signal.
+export function isCloseFit(gap: GapResult): boolean {
+  const required = gap.required.length;
+  if (required === 0) return false;
+  const covered = required - gap.gaps.length;
+  return covered / required >= 0.8;
+}
+
+// Significant JD tokens (lowercased, length ≥ 3, minus common stopwords) used to score relevance of
+// optional content. Deliberately simple + deterministic — matching the conservative posture of the
+// gap lexicon: relevance nudges selection, it never invents or claims anything.
+const RELEVANCE_STOPWORDS = new Set([
+  'the', 'and', 'for', 'with', 'you', 'your', 'our', 'are', 'will', 'have', 'has', 'was', 'were',
+  'this', 'that', 'from', 'all', 'can', 'not', 'but', 'they', 'them', 'their', 'who', 'what', 'when',
+  'where', 'how', 'why', 'role', 'job', 'team', 'work', 'working', 'experience', 'years', 'year',
+  'strong', 'including', 'across', 'using', 'etc', 'plus', 'preferred', 'required', 'ability', 'able',
+  'skills', 'knowledge', 'understanding', 'help', 'build', 'building', 'develop', 'developing',
+]);
+
+function relevanceTokenize(text: string): string[] {
+  return (text.toLowerCase().match(/[a-z0-9+#]+/g) ?? []).filter(
+    (t) => t.length >= 3 && !RELEVANCE_STOPWORDS.has(t),
+  );
+}
+
+export function jdRelevanceTokens(jdText: string): Set<string> {
+  return new Set(relevanceTokenize(jdText));
+}
+
+// Number of DISTINCT JD tokens that appear in `text`. Higher = more JD-relevant.
+function relevanceScore(text: string, jdTokens: Set<string>): number {
+  let score = 0;
+  const seen = new Set<string>();
+  for (const token of relevanceTokenize(text)) {
+    if (!seen.has(token) && jdTokens.has(token)) {
+      score += 1;
+      seen.add(token);
+    }
+  }
+  return score;
+}
+
+// Keep the top-`cap` items by relevance, but render the survivors in their ORIGINAL order (awards +
+// projects read chronologically/by importance; we only drop the least-relevant tail, not reorder).
+function selectTopKPreserveOrder<T>(
+  items: readonly T[], textOf: (item: T) => string, jdTokens: Set<string>, cap: number,
+): T[] {
+  if (items.length <= cap) return [...items];
+  const scored = items.map((item, index) => ({ item, index, score: relevanceScore(textOf(item), jdTokens) }));
+  const keep = new Set(
+    [...scored].sort((a, b) => b.score - a.score || a.index - b.index).slice(0, cap).map((s) => s.index),
+  );
+  return scored.filter((s) => keep.has(s.index)).map((s) => s.item);
+}
+
+// Order items JD-relevant-first (stable on ties) — used for the skills line so the most JD-relevant
+// tools lead, then cap the tail.
+function rankByRelevanceStable<T>(items: readonly T[], textOf: (item: T) => string, jdTokens: Set<string>): T[] {
+  return items
+    .map((item, index) => ({ item, index, score: relevanceScore(textOf(item), jdTokens) }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((s) => s.item);
+}
+
+// Tighten a summary to its leading sentence (close-fit) so the bullets get the page.
+function tightenSummary(summary: string): string {
+  const trimmed = summary.trim();
+  if (!trimmed) return trimmed;
+  const match = trimmed.match(/^[^.!?]*[.!?]/);
+  return match ? match[0].trim() : trimmed;
+}
+
+export interface OnePageSelectionOptions {
+  /** From `isCloseFit(computeGap(...))`: tighten the summary + prune optional content harder. */
+  closeFit: boolean;
+}
+
+// Optional-content caps by fit. Close-fit trims harder (bullets deserve the page); a stretch/pivot
+// keeps more supporting breadth. Experience + education are NEVER in scope here — chronology stays
+// complete. A confirmed-added (G1) skill is always JD-relevant (it came from the JD gap), so it
+// scores > 0 and is never pruned.
+const OPTIONAL_CAPS = {
+  closeFit: { awards: 3, projects: 1, skillsPerGroup: 12 },
+  stretch: { awards: 6, projects: 3, skillsPerGroup: 16 },
+} as const;
+
+// Prune/reorder the LESS-relevant optional content (skills, projects, awards) to hold one legible
+// page, and adapt the summary — keeping every employment + education entry. Returns a new
+// StructuredResume (the source is never mutated). Feeds the one-page renderer + the persisted
+// artifact, so preview == download still holds on the pruned result.
+export function pruneOptionalForRelevance(
+  resume: StructuredResume,
+  jdText: string,
+  opts: OnePageSelectionOptions,
+): StructuredResume {
+  const jdTokens = jdRelevanceTokens(jdText);
+  const caps = opts.closeFit ? OPTIONAL_CAPS.closeFit : OPTIONAL_CAPS.stretch;
+
+  // Summary: close-fit tightens to the leading sentence; a stretch/pivot keeps the bridge summary.
+  const summary = opts.closeFit ? tightenSummary(resume.summary) : resume.summary;
+
+  // Awards: keep the most JD-relevant up to the cap, in original order.
+  const awards = selectTopKPreserveOrder(
+    resume.awards, (a) => `${a.title} ${a.detail ?? ''}`, jdTokens, caps.awards,
+  );
+
+  // Projects: keep the most JD-relevant up to the cap; on a close fit also drop any project with no
+  // JD relevance at all (it is pure filler competing with the experience bullets for the page).
+  let projects = selectTopKPreserveOrder(
+    resume.projects, (p) => `${p.name} ${p.scope ?? ''} ${p.bullets.join(' ')}`, jdTokens, caps.projects,
+  );
+  if (opts.closeFit) {
+    projects = projects.filter(
+      (p) => relevanceScore(`${p.name} ${p.scope ?? ''} ${p.bullets.join(' ')}`, jdTokens) > 0,
+    );
+  }
+
+  // Skills: order JD-relevant items first within each group, then cap the group. Empty groups are
+  // dropped by the renderer, so a group emptied by capping simply disappears (never a blank line).
+  const skills = resume.skills.map((group) => ({
+    ...group,
+    items: rankByRelevanceStable(group.items, (s) => s, jdTokens).slice(0, caps.skillsPerGroup),
+  }));
+
+  return {
+    contact: resume.contact,
+    summary,
+    awards,
+    experience: resume.experience,
+    projects,
+    education: resume.education,
+    skills,
+  };
 }

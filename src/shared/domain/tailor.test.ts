@@ -10,8 +10,10 @@ import {
   evidenceLikelyRecoverable,
   FOREIGN_TECH_DENYLIST,
   groundReword,
+  isCloseFit,
   isTailorAction,
   parseTailoredResumePatch,
+  pruneOptionalForRelevance,
   TAILOR_ACTIONS,
   TAILOR_PRIVACY_ACTION,
   tailorIncludedCategories,
@@ -19,6 +21,8 @@ import {
   type TailorContext,
 } from './tailor';
 import { flattenResumeText, buildStructuredResumeDocument, type StructuredResume } from './resume';
+import { computeGap } from './gap';
+import { createStructuredResumePdf } from '../../features/tailor/resumePdf';
 
 // A representative context: one confirmed (evidenced) addition and one declined gap.
 function ctx(action: TailorContext['action']): TailorContext {
@@ -501,6 +505,74 @@ test('diffTailored shows a dropped bullet as a shorter after-set (omission is vi
   const role0 = diff.roles.find((r) => r.org === resume.experience[0].org && r.title === resume.experience[0].title);
   assert.ok(role0);
   assert.ok(role0!.before.length > role0!.after.length);
+});
+
+// ================================================================================================
+// G2 — relevance-based optional-content selection + adaptive summary (never drops roles/education).
+// ================================================================================================
+
+const closeFitJd = readFileSync('fixtures/close-fit-jd.txt', 'utf8');
+const pivotJd = readFileSync('fixtures/pivot-jd.txt', 'utf8');
+// The candidate's evidenced skills, drawn from the résumé's own Skills section.
+const resumeSkills = resume.skills.flatMap((g) => g.items);
+
+test('isCloseFit: a role the candidate fully evidences is close; a devops pivot is not', () => {
+  const closeGap = computeGap({ jdText: closeFitJd, evidence: resumeSkills });
+  const pivotGap = computeGap({ jdText: pivotJd, evidence: resumeSkills });
+  assert.equal(isCloseFit(closeGap), true);
+  assert.equal(isCloseFit(pivotGap), false);
+  // An unrecognised JD (no required skills extracted) is NOT a confident close fit — keep the bridge.
+  assert.equal(isCloseFit(computeGap({ jdText: 'We value curiosity and grit.', evidence: resumeSkills })), false);
+});
+
+test('G2.1 close-fit tightens the summary and stays one page; a pivot keeps the bridge summary', () => {
+  const close = pruneOptionalForRelevance(resume, closeFitJd, { closeFit: true });
+  // Summary shortened on a close fit (bullets deserve the page), still grounded in the source text.
+  assert.ok(close.summary.length < resume.summary.length, 'close-fit summary should be tightened');
+  assert.ok(resume.summary.startsWith(close.summary), 'tightened summary must be a prefix of the source');
+  // The one-page invariant holds on the pruned result.
+  assert.equal(createStructuredResumePdf(close).getNumberOfPages(), 1);
+
+  // A stretch/pivot keeps the full bridge-explaining summary.
+  const pivot = pruneOptionalForRelevance(resume, pivotJd, { closeFit: false });
+  assert.equal(pivot.summary, resume.summary);
+});
+
+test('G2.1 the structured prompt carries adaptive summary guidance for close-fit vs. pivot', () => {
+  const [, closeUser] = buildTailorResumeMessages({ company: 'X', role: 'Y', jdText: closeFitJd, resume, closeFit: true });
+  assert.match(closeUser.content, /already closely matches[\s\S]*at most/i);
+  const [, pivotUser] = buildTailorResumeMessages({ company: 'X', role: 'Y', jdText: pivotJd, resume, closeFit: false });
+  assert.match(pivotUser.content, /adjacent\/stretch move[\s\S]*bridges/i);
+});
+
+test('G2.2 less-relevant optional content is pruned while full chronology is preserved', () => {
+  const close = pruneOptionalForRelevance(resume, closeFitJd, { closeFit: true });
+  // Employment + education chronology stays COMPLETE — never a dropped role or school.
+  assert.equal(close.experience.length, resume.experience.length);
+  assert.deepEqual(close.experience.map((e) => e.title), resume.experience.map((e) => e.title));
+  assert.equal(close.education.length, resume.education.length);
+  assert.deepEqual(close.education.map((e) => e.school), resume.education.map((e) => e.school));
+  // Optional content IS pruned by relevance.
+  assert.ok(close.awards.length < resume.awards.length, 'less-relevant awards pruned');
+  const closeSkills = close.skills.flatMap((g) => g.items);
+  assert.ok(closeSkills.length < resumeSkills.length, 'less-relevant skills pruned');
+  // But the JD-relevant skills are always kept (a confirmed-added skill would be too).
+  for (const kept of ['Python', 'SQL', 'XGBoost', 'Machine Learning']) {
+    assert.ok(closeSkills.includes(kept), `${kept} must survive relevance pruning`);
+  }
+  // The pruning is surfaced by the diff as omissions (transparent + reversible via restore).
+  const diff = diffTailored(resume, close);
+  assert.ok(diff.omittedOptional.length > 0, 'pruned optional content is reported as omissions');
+  assert.equal(diff.roles.length, 0, 'no role bullets changed by pure selection');
+});
+
+test('G2 a stretch/pivot keeps optional content within its wider budget (no over-pruning)', () => {
+  const pivot = pruneOptionalForRelevance(resume, pivotJd, { closeFit: false });
+  assert.equal(pivot.awards.length, resume.awards.length);
+  assert.equal(pivot.projects.length, resume.projects.length);
+  assert.equal(pivot.skills.flatMap((g) => g.items).length, resumeSkills.length);
+  // Restore parity is untouched — an identity prune of the source reports no changes.
+  assert.equal(diffTailored(resume, resume).unchanged, true);
 });
 
 test('buildTailorResumeMessages surfaces confirmed truthful additions to the model', () => {

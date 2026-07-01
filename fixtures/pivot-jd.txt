@@ -1,0 +1,12 @@
+Senior Platform / DevOps Engineer
+
+We are looking for a platform engineer to own our cloud infrastructure and
+delivery pipelines.
+
+Requirements:
+- Deep Kubernetes in production, plus Docker container workflows
+- Terraform / infrastructure-as-code for reproducible environments
+- AWS across compute, storage, and networking
+- CI/CD pipelines and observability for reliable continuous delivery
+
+This is a deliberate pivot for a candidate coming from a data science background.

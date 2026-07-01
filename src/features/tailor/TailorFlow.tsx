@@ -22,6 +22,8 @@ import {
   buildTailorMessages,
   buildTailorResumeMessages,
   evidenceLikelyRecoverable,
+  isCloseFit,
+  pruneOptionalForRelevance,
   tailorStructuredResume,
   TAILOR_ACTIONS,
   TAILOR_ACTION_LABEL,
@@ -53,7 +55,7 @@ import { ModalShell } from '../tracker/ApplicationForm';
 import { DEFAULT_SETTINGS_FORM, modelLabel, settingsToForm } from '../settings/settings';
 import StructuredResumePreview from './StructuredResumePreview';
 import TailorReview from './TailorReview';
-import { insertTailorArtifact } from './tailorArtifacts';
+import { insertTailorArtifact, updateTailorArtifact } from './tailorArtifacts';
 
 interface TailorFlowProps {
   application: Application;
@@ -130,6 +132,9 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
   // The applied tailored StructuredResume for THIS run — drives the preview + download + the JSON
   // persisted in the artifact, so preview == download (B6.4 AC#3/#4).
   const [tailoredResume, setTailoredResume] = useState<StructuredResume | null>(null);
+  // The saved tailored-résumé artifact id, captured at its initial save so review edits/restores can
+  // re-persist onto the SAME row (G3-persistence: stored artifact == preview == download).
+  const [tailorArtifactId, setTailorArtifactId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [stage, setStage] = useState<FlowStage>('privacy');
@@ -189,6 +194,9 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
     () => computeGap({ jdText: application.jd_text ?? '', evidence: profile?.skills ?? [] }),
     [application.jd_text, profile?.skills],
   );
+  // G2: a deterministic close-fit signal that adapts the summary (tighten/omit vs. bridge) and how
+  // hard optional content is pruned to hold one page.
+  const closeFit = useMemo(() => isCloseFit(gap), [gap]);
 
   const allGapsResolved = gap.gaps.every((question) => {
     const decision = decisions[question.skill];
@@ -312,6 +320,8 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
               resume: structuredResume as StructuredResume,
               // G1: the confirmed + evidenced JD skills for this run — the model may fold them in.
               truthfulAdditions: folded?.truthfulAdditions ?? [],
+              // G2: adapt the summary to a close fit (tighten/omit) vs. a stretch (keep the bridge).
+              closeFit,
             })
           : buildTailorMessages(context),
         includedCategories: tailorIncludedCategories(context),
@@ -339,9 +349,12 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
           evidence: additions.map((a) => a.evidence),
           skills: additions.map((a) => skillLabel(a.skill)),
         });
-        setTailoredResume(tailored);
-        persistContent = JSON.stringify(tailored);
-        const readable = flattenResumeText(buildStructuredResumeDocument(tailored)).join('\n');
+        // G2: prune the LESS-relevant optional content (skills/projects/awards) and adapt the summary
+        // to hold one legible page — full employment + education chronology is preserved.
+        const optimized = pruneOptionalForRelevance(tailored, application.jd_text ?? '', { closeFit });
+        setTailoredResume(optimized);
+        persistContent = JSON.stringify(optimized);
+        const readable = flattenResumeText(buildStructuredResumeDocument(optimized)).join('\n');
         setOutputs((current) => ({ ...current, [action]: readable }));
       }
 
@@ -352,6 +365,11 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
         content: persistContent,
         model: settings.model,
       });
+      // Remember the tailored-résumé row so review edits/restores re-persist onto it (G3-persist).
+      if (structuredTailor) {
+        setTailorArtifactId(artifact.id);
+        lastPersistedRef.current = persistContent;
+      }
       onArtifactSaved(artifact);
       setStatuses((current) => ({ ...current, [action]: 'saved' }));
       setAuditNote(`${TAILOR_ACTION_LABEL[action]} saved. Its provider call is logged in Privacy.`);
@@ -373,6 +391,25 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
     }
+  }
+
+  // G3-persistence: every review edit/restore updates the in-memory tailored résumé (so the canvas
+  // preview and the PDF download stay identical) AND re-persists it onto the saved artifact row, so
+  // the stored copy never drifts from what the user actually downloads. Skipped when nothing changed
+  // (e.g. a restore that produced identical bytes) to avoid a redundant write.
+  const lastPersistedRef = useRef<string | null>(null);
+  function handleTailoredChange(next: StructuredResume) {
+    setTailoredResume(next);
+    if (!tailorArtifactId) return;
+    const content = JSON.stringify(next);
+    if (content === lastPersistedRef.current) return;
+    lastPersistedRef.current = content;
+    void updateTailorArtifact({ artifactId: tailorArtifactId, content })
+      .then(() => setAuditNote('Tailored résumé updated. Your saved copy matches this download.'))
+      .catch((error) => {
+        lastPersistedRef.current = null;
+        setFlowError(error instanceof Error ? error.message : 'Could not save your edit.');
+      });
   }
 
   async function copyActiveOutput() {
@@ -595,7 +632,7 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
                       source={structuredResume}
                       tailored={tailoredResume}
                       unsupportedJd={(resolutions?.futureSuggestions ?? []).map((s) => skillLabel(s))}
-                      onChange={setTailoredResume}
+                      onChange={handleTailoredChange}
                     />
                   </div>
                 )}

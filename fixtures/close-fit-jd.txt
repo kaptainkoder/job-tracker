@@ -1,0 +1,14 @@
+Senior Data Scientist — Commercial Marketing Decision Science
+
+We are hiring a senior data scientist to build predictive models that drive
+incremental revenue through customer targeting and acquisition across our
+commercial marketing portfolio.
+
+Requirements:
+- Strong Python and SQL for large-scale modeling and analysis
+- Hands-on machine learning, including gradient boosting (XGBoost) for
+  response, balance, and incremental revenue models
+- Experience translating data problems into targeting and acquisition strategy
+- Comfort partnering with marketing stakeholders on decision science
+
+This is a close match for an experienced commercial marketing decision scientist.
