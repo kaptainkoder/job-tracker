@@ -146,7 +146,10 @@ test('buildTailorResumeMessages carries the no-fabrication + JSON-only reword co
   });
   assert.equal(system.role, 'system');
   assert.match(system.content, /never invent/i);
-  assert.match(system.content, /REWORD and REORDER/);
+  assert.match(system.content, /REWORD existing material/);
+  // Holistic rewording contract: whole-résumé judgement, and roles are NOT reordered.
+  assert.match(system.content, /HOLISTICALLY/);
+  assert.match(system.content, /Do NOT reorder roles/);
   assert.match(system.content, /ONLY a single JSON object/);
   // Layout-bearing sections are explicitly withheld from the model (locked, deterministic render).
   assert.match(system.content, /kept verbatim from the[\s\S]*source/i);
@@ -271,18 +274,33 @@ test('every rendered string of a tailored résumé traces to the source OR a rew
   }
 });
 
-// --- reorder license + no-role-dropped guarantee ----------------------------------------------
+// --- chronology preserved (roles never reorder) + no-role-dropped guarantee -------------------
 
-test('experienceOrder reorders roles; omitted roles are appended, never dropped', () => {
+test('roles always render in source (reverse-chronological) order — never reordered', () => {
+  // Even when the patch rewords the last role, the roles keep their source order exactly.
   const n = resume.experience.length;
-  // Only name the last role first; the rest must still appear, in original order.
-  const tailored = applyTailoredResume(resume, { experienceOrder: [n - 1], experience: [] });
+  const tailored = applyTailoredResume(resume, {
+    experience: [{ ref: n - 1, bullets: ['Reworded final-role bullet.'] }],
+  });
   assert.equal(tailored.experience.length, n);
-  assert.equal(tailored.experience[0].title, resume.experience[n - 1].title);
-  // The remaining roles follow in their original relative order.
   assert.deepEqual(
-    tailored.experience.slice(1).map((e) => e.title),
-    resume.experience.slice(0, n - 1).map((e) => e.title),
+    tailored.experience.map((e) => e.title),
+    resume.experience.map((e) => e.title),
+  );
+});
+
+test('a stray experienceOrder in raw model JSON is ignored — order stays chronological', () => {
+  const n = resume.experience.length;
+  // A model may still emit experienceOrder; the parser drops it and roles keep source order.
+  const patch = parseTailoredResumePatch(
+    JSON.stringify({ experienceOrder: [n - 1, 0], experience: [] }),
+  );
+  assert.ok(patch);
+  assert.equal('experienceOrder' in patch!, false);
+  const tailored = applyTailoredResume(resume, patch!);
+  assert.deepEqual(
+    tailored.experience.map((e) => e.title),
+    resume.experience.map((e) => e.title),
   );
 });
 
@@ -291,19 +309,6 @@ test('a role with empty reworded bullets keeps its source bullets (no content dr
     experience: [{ ref: 0, bullets: ['   ', ''] }],
   });
   assert.deepEqual(tailored.experience[0].bullets, resume.experience[0].bullets);
-});
-
-test('an invalid/non-permutation experienceOrder still yields every source role once', () => {
-  const n = resume.experience.length;
-  const tailored = applyTailoredResume(resume, {
-    experienceOrder: [0, 0, 99, -1], // duplicates + out-of-range are ignored
-    experience: [],
-  });
-  assert.equal(tailored.experience.length, n);
-  assert.deepEqual(
-    [...tailored.experience.map((e) => e.title)].sort(),
-    [...resume.experience.map((e) => e.title)].sort(),
-  );
 });
 
 // --- end-to-end convenience: bad model output falls back to the un-tailored source ------------

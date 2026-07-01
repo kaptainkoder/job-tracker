@@ -10,6 +10,7 @@ import {
 } from './resume';
 import {
   createStructuredResumePdf,
+  splitBulletForWidth,
   splitMetricRuns,
   structuredResumePdfBytes,
 } from '../../features/tailor/resumePdf';
@@ -115,6 +116,56 @@ test('the real fixture résumé renders on exactly ONE A4 page (B6.4-R)', () => 
   assert.equal(createStructuredResumePdf(resume, interBase64).getNumberOfPages(), 1);
   // …and the same with the fallback font, so the one-page invariant never depends on font loading.
   assert.equal(createStructuredResumePdf(resume).getNumberOfPages(), 1);
+});
+
+// --- uniform bullet sizing: clause-split instead of per-bullet shrink (G-followup 2026-07-02) -----
+
+test('splitBulletForWidth keeps a fitting bullet whole', () => {
+  const measure = (line: string) => line.length; // width == char count
+  assert.deepEqual(splitBulletForWidth('Short bullet.', 40, measure), ['Short bullet.']);
+});
+
+test('splitBulletForWidth splits an over-wide bullet into clean full-looking bullets', () => {
+  const measure = (line: string) => line.length;
+  const bullet =
+    'Led end-to-end development of an s-learner XGBoost model, driving $15M in annual revenue.';
+  const pieces = splitBulletForWidth(bullet, 60, measure);
+  // Split at the clause boundary into two bullets, each within the width budget.
+  assert.equal(pieces.length, 2);
+  for (const piece of pieces) assert.ok(measure(piece) <= 60, `piece too wide: "${piece}"`);
+  // The continuation reads as its own clean bullet: capitalised, no dangling comma.
+  assert.equal(pieces[0], 'Led end-to-end development of an s-learner XGBoost model');
+  assert.equal(pieces[1], 'Driving $15M in annual revenue.');
+  // No words are lost across the split (metric preserved, decimals never break).
+  const rejoined = pieces.join(' ').toLowerCase();
+  for (const word of ['s-learner', 'xgboost', '$15m', 'revenue']) assert.match(rejoined, new RegExp(word.replace('$', '\\$')));
+});
+
+test('splitBulletForWidth never breaks a decimal/metric token', () => {
+  const measure = (line: string) => line.length;
+  const pieces = splitBulletForWidth('Improved lift by 41.25% and cut cost by 18%.', 30, measure);
+  assert.ok(pieces.every((p) => !/\d\.$/.test(p)), 'a decimal must not become a line break');
+  assert.match(pieces.join(' '), /41\.25%/);
+});
+
+test('an unsplittable over-wide clause stays one bullet (caller floor-shrinks it, no clip)', () => {
+  const measure = (line: string) => line.length;
+  const oneClause = 'Supercalifragilisticexpialidocious'.repeat(3);
+  assert.deepEqual(splitBulletForWidth(oneClause, 10, measure), [oneClause]);
+});
+
+test('a résumé with long bullets still renders on exactly ONE A4 page (uniform sizing holds fit)', () => {
+  const interBase64 = readFileSync('src/assets/InterVariable.ttf').toString('base64');
+  const longBullets: StructuredResume = {
+    ...resume,
+    experience: resume.experience.map((exp) => ({
+      ...exp,
+      bullets: exp.bullets.map(
+        (b) => `${b} Additionally partnered with cross-functional stakeholders, drove adoption, and documented the approach.`,
+      ),
+    })),
+  };
+  assert.equal(createStructuredResumePdf(longBullets, interBase64).getNumberOfPages(), 1);
 });
 
 test('splitMetricRuns bolds metric tokens and leaves prose normal (B6.4-R)', () => {

@@ -237,6 +237,10 @@ async function main() {
 
     // The tailor tab is active; the review shows the reworded bullet as a change, so restore is live.
     assert.match(document.body.textContent ?? '', /What tailoring changed/i);
+    // The scrollable result panel shows the REWORDED résumé text before restore.
+    const panelBefore = () =>
+      document.querySelector('[aria-label="Tailored résumé result"]')?.textContent ?? '';
+    assert.match(panelBefore(), /analytics reporting/i, 'panel shows reworded text pre-restore');
     // No re-persist has fired yet — the initial save at generation is the only write so far.
     assert.equal(globals.__SUPABASE_UPDATES__.length, 0, 'no edit yet ⇒ no re-persist');
 
@@ -250,6 +254,11 @@ async function main() {
     assert.deepEqual(persisted, source, 'restored tailored résumé equals the source byte-for-byte');
     // The review now reports no outstanding changes (preview == download == saved).
     assert.match(document.body.textContent ?? '', /nothing was added, reworded, or dropped/i);
+    // Item 2: the result panel re-syncs LIVE to the restored source text (was stale until reopen).
+    const panelAfter =
+      document.querySelector('[aria-label="Tailored résumé result"]')?.textContent ?? '';
+    assert.match(panelAfter, /cut report latency/i, 'panel re-syncs to source text after restore');
+    assert.doesNotMatch(panelAfter, /analytics reporting/i, 'stale reworded text is gone after restore');
     await cleanup();
   });
 

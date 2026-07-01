@@ -182,9 +182,11 @@ export interface TailoredExperience {
 export interface TailoredResumePatch {
   /** Reworded professional summary (optional — falls back to the source summary). */
   summary?: string;
-  /** A reordering of source experience indices to surface JD-relevant roles first. */
-  experienceOrder?: number[];
-  /** Per-role reworded bullets/scope, keyed by `ref` into source.experience. */
+  /**
+   * Per-role reworded bullets/scope, keyed by `ref` into source.experience. Roles are NEVER
+   * reordered — the résumé always renders in the source's (reverse-chronological) order; relevance is
+   * surfaced by rewording/emphasising bullets, not by moving roles around.
+   */
   experience: TailoredExperience[];
 }
 
@@ -217,13 +219,21 @@ const STRUCTURED_TAILOR_SYSTEM = [
   '',
   'You are given the candidate’s résumé as structured JSON — the ONLY truthful source, plus an',
   'optional list of CONFIRMED TRUTHFUL ADDITIONS: skills the candidate has confirmed and backed with',
-  'their own usage evidence. Your job is to REWORD and REORDER existing material toward the target',
-  'job, in the job’s vocabulary, and to truthfully fold in the confirmed additions, WITHOUT adding any',
-  'fact, skill, employer, title, date, metric, or credential that is not already present in the source',
-  'résumé OR in a confirmed addition’s evidence. You may rephrase the summary and the experience',
-  'bullets, tighten a scope line, drop a bullet that is irrelevant to the job, and reorder bullets',
-  'within a role and roles relative to each other to surface the most JD-relevant first.',
-  'You may NOT invent a role, award, school, skill, or number. Do not drop a role entirely.',
+  'their own usage evidence. Your job is to REWORD existing material toward the target job, in the',
+  'job’s vocabulary, and to truthfully fold in the confirmed additions, WITHOUT adding any fact,',
+  'skill, employer, title, date, metric, or credential that is not already present in the source',
+  'résumé OR in a confirmed addition’s evidence.',
+  '',
+  'Work HOLISTICALLY, not bullet-by-bullet — this is what intelligent rewording means. First read the',
+  'WHOLE résumé and the WHOLE job description and understand the candidate’s overall story and what',
+  'THIS role values most. Then reshape the content the way a sharp editor would: emphasise the',
+  'experience that matters most here, reword in the job’s language, MERGE two overlapping bullets into',
+  'one stronger line, or SPLIT one overloaded bullet into two focused single-line bullets when it',
+  'carries two distinct results. Keep each role’s bullets coherent as a set, and avoid repeating the',
+  'same phrasing across roles. You may rephrase the summary, reword and reorder bullets WITHIN a role,',
+  'tighten a scope line, and drop a bullet that is irrelevant to the job. Do NOT reorder roles — the',
+  'résumé always stays in the source (reverse-chronological) order. You may NOT invent a role, award,',
+  'school, skill, or number, and never drop a role entirely.',
   '',
   'Confirmed truthful additions (when present):',
   '- A confirmed skill may be named in a reworded bullet ONLY when its evidence describes using it.',
@@ -234,6 +244,7 @@ const STRUCTURED_TAILOR_SYSTEM = [
   '',
   'Hard constraints for the rewording:',
   '- Keep each bullet CONCISE — one short, single-line sentence. Lead with the action + the metric.',
+  '  If a result would run long, split it into two focused single-line bullets rather than cramming.',
   '- Reword in the job’s vocabulary, but ONLY by inference grounded in the source bullet or evidence.',
   '  Never name a tool, platform, or domain the candidate has not used (e.g. AWS, Snowflake, Azure,',
   '  Databricks, Hadoop, Kafka, AML) — use only the candidate’s own stack.',
@@ -244,7 +255,6 @@ const STRUCTURED_TAILOR_SYSTEM = [
   'Return ONLY a single JSON object (no prose, no Markdown, no code fence) of this exact shape:',
   '{',
   '  "summary": "<reworded summary, optional>",',
-  '  "experienceOrder": [<source experience indices, most relevant first, optional>],',
   '  "experience": [',
   '    { "ref": <0-based index of a source experience>, "scope": "<reworded scope, optional>",',
   '      "bullets": ["<reworded bullet>", "..."] }',
@@ -358,9 +368,7 @@ export function parseTailoredResumePatch(raw: string): TailoredResumePatch | nul
 
   const patch: TailoredResumePatch = { experience };
   if (typeof obj.summary === 'string') patch.summary = obj.summary;
-  if (Array.isArray(obj.experienceOrder) && obj.experienceOrder.every((n) => typeof n === 'number' && Number.isInteger(n))) {
-    patch.experienceOrder = obj.experienceOrder as number[];
-  }
+  // Any `experienceOrder` a model still emits is intentionally ignored — roles never reorder.
   return patch;
 }
 
@@ -440,9 +448,9 @@ export function groundReword(text: string, numbers: Set<string>, allowed: Set<st
 // deterministic renderer (createStructuredResumePdf) can draw. The truthfulness guarantee lives
 // HERE, not in the prompt: every structural fact (contact, awards, projects, education, skills, and
 // each experience entry's org/orgDetail/location/title/start/end) comes from `source`; the model can
-// only influence the summary text, each role's bullet wording/order, the scope line, and the order
-// of roles. An out-of-range `ref` or a non-permutation `experienceOrder` is ignored, and no role is
-// ever dropped (a role with no reworded bullets keeps its source bullets).
+// only influence the summary text, each role's bullet wording/order, and the scope line. Roles are
+// NEVER reordered (source reverse-chronological order is preserved); an out-of-range `ref` is ignored,
+// and no role is ever dropped (a role with no reworded bullets keeps its source bullets).
 // G1 ingestion options: the user's confirmed truthful additions for this run. `evidence` strings
 // extend the grounding corpus (so an evidence-derived bullet's numbers/terms pass groundReword);
 // `skills` are the confirmed JD-skill labels, added to the Skills section DETERMINISTICALLY (never
@@ -490,19 +498,11 @@ export function applyTailoredResume(
     if (e.ref >= 0 && e.ref < total) byRef.set(e.ref, e);
   }
 
-  // Build the final order: take valid, unique, in-range indices from experienceOrder, then append
-  // any source roles the model omitted (so a role is never silently dropped) in their original order.
-  const order: number[] = [];
-  const seen = new Set<number>();
-  for (const idx of patch.experienceOrder ?? []) {
-    if (Number.isInteger(idx) && idx >= 0 && idx < total && !seen.has(idx)) {
-      order.push(idx);
-      seen.add(idx);
-    }
-  }
-  for (let i = 0; i < total; i++) {
-    if (!seen.has(i)) order.push(i);
-  }
+  // Roles ALWAYS render in the source's (reverse-chronological) order — the model may reword a role's
+  // bullets/scope but never move roles relative to each other. Chronology is a hard invariant: a
+  // recruiter expects reverse-chronological experience, and relevance is surfaced by wording, not by
+  // reordering roles (which previously flipped adjacent same-employer roles and broke the timeline).
+  const order = Array.from({ length: total }, (_, i) => i);
 
   const experience = order.map((i) => {
     const src = source.experience[i];

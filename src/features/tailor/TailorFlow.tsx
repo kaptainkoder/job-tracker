@@ -400,6 +400,11 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
   const lastPersistedRef = useRef<string | null>(null);
   function handleTailoredChange(next: StructuredResume) {
     setTailoredResume(next);
+    // Keep the scrollable readable text panel in lock-step with the canvas preview + PDF: re-flatten
+    // the edited/restored résumé the same way generation did, so an edit/restore is reflected live
+    // (previously the panel kept showing the pre-edit text until the flow was reopened).
+    const readable = flattenResumeText(buildStructuredResumeDocument(next)).join('\n');
+    setOutputs((current) => ({ ...current, tailor: readable }));
     if (!tailorArtifactId) return;
     const content = JSON.stringify(next);
     if (content === lastPersistedRef.current) return;
