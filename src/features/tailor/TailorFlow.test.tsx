@@ -43,6 +43,14 @@ function click(text: string) {
   button!.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 }
 
+// Click every button matching the text — used when the gap interview shows one card per unevidenced
+// skill (e.g. with no structured résumé, both Python and SQL need a decision to resolve the gap).
+function clickAll(text: string) {
+  const buttons = [...document.querySelectorAll('button')].filter((item) => item.textContent?.includes(text));
+  assert.ok(buttons.length > 0, `expected at least one button containing "${text}"`);
+  for (const button of buttons) button.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+}
+
 async function waitForText(text: RegExp) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     if (text.test(document.body.textContent ?? '')) return;
@@ -195,7 +203,10 @@ async function main() {
     try {
       const cleanup = await mount();
       await act(async () => click('Review privacy & continue'));
-      await act(async () => click('Not in my experience'));
+      // With no structured résumé there are no evidenced skills, so every JD skill (Python AND SQL)
+      // needs a decision before the gap resolves. Wave H: gap evidence comes from the structured
+      // résumé, not the flat profile.skills mirror.
+      await act(async () => clickAll('Not in my experience'));
       await act(async () => click('Generate the kit'));
       // The chain starts at the cover letter — the résumé action never fires.
       await act(async () => click('Approve & send'));
@@ -216,6 +227,29 @@ async function main() {
       await cleanup();
     } finally {
       globals.__SUPABASE_ROWS__.resume_structured = savedResume;
+    }
+  });
+
+  await test('Wave H: gap evidence comes from structured skills even when flat profile.skills is empty', async () => {
+    globals.__LLM_CALLS__.length = 0;
+    const profileRow = globals.__SUPABASE_ROWS__.profile;
+    const savedSkills = profileRow?.skills;
+    if (profileRow) profileRow.skills = []; // the 07-02 bug shape: empty flat list
+    try {
+      const cleanup = await mount();
+      await act(async () => click('Review privacy & continue'));
+      await waitForText(/Nothing is claimed automatically/i);
+      // Structured résumé evidences SQL, so only Python remains a gap — the empty flat list no
+      // longer mis-detects the fit. One decision resolves the gap.
+      const declineButtons = [...document.querySelectorAll('button')].filter((b) =>
+        b.textContent?.includes('Not in my experience'),
+      );
+      assert.equal(declineButtons.length, 1, 'only the unevidenced Python skill should remain a gap');
+      assert.match(document.body.textContent ?? '', /Python/);
+      assert.doesNotMatch(document.body.textContent ?? '', /demonstrates SQL/i);
+      await cleanup();
+    } finally {
+      if (profileRow) profileRow.skills = savedSkills;
     }
   });
 

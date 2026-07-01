@@ -190,9 +190,16 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
 
   const resumeReady = structuredResume !== null;
 
+  // Wave H — close-fit/gap evidence comes from the confirmed structured résumé skills (the single
+  // source of truth), not the flat profile.skills mirror. This fixes the empty-flat-list mis-detect
+  // at root: the structured skills exist whenever a confirmed résumé does.
+  const structuredSkills = useMemo(
+    () => structuredResume?.skills.flatMap((g) => g.items) ?? [],
+    [structuredResume],
+  );
   const gap = useMemo(
-    () => computeGap({ jdText: application.jd_text ?? '', evidence: profile?.skills ?? [] }),
-    [application.jd_text, profile?.skills],
+    () => computeGap({ jdText: application.jd_text ?? '', evidence: structuredSkills }),
+    [application.jd_text, structuredSkills],
   );
   // G2: a deterministic close-fit signal that adapts the summary (tighten/omit vs. bridge) and how
   // hard optional content is pruned to hold one page.
@@ -648,7 +655,7 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
                     <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-soft">
                       The tailored résumé rewords your confirmed structured résumé toward this role—truthfully, never inventing anything. You haven&apos;t saved one yet, so nothing was sent for the résumé. Your cover letter and interview prep are ready in the other tabs.
                     </p>
-                    <a href="/resume" className="mt-3 inline-block text-sm font-medium text-accent hover:underline">Set up your résumé</a>
+                    <a href="/profile" className="mt-3 inline-block text-sm font-medium text-accent hover:underline">Set up your résumé</a>
                   </div>
                 ) : (
                   <div className="mt-3 rounded-xl border border-line bg-surface p-5 shadow-card" role="tabpanel" aria-label={`${TAILOR_ACTION_LABEL[activeTab]} result`}>

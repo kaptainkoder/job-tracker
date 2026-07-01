@@ -36,6 +36,7 @@ import {
 import { extractPdfText } from './resumePdfText';
 import { loadStructuredResume, saveStructuredResume, downloadBaseResume } from './resumeStore';
 import { baseResumePath, validatePdfFile } from '../profile/profile';
+import { structuredToProfilePayload } from '../profile/profileSync';
 
 // B6.3 — the one-time-parse review/edit screen. Built to the canonical Claude Design
 // (design-ref/b6.3-resume-review): a banner, six sections (Summary, Experience, Education, Skills,
@@ -198,9 +199,20 @@ export default function ResumeReviewPage() {
     setSaveError(null);
     setSaveSuccess(null);
     const { record, error } = await saveStructuredResume(user.id, resume, sourceFilename);
-    setSaving(false);
     if (error || !record) {
+      setSaving(false);
       setSaveError(error ?? 'Could not save your résumé.');
+      return;
+    }
+    // Wave H — mirror contact + skills into the thin `profile` table so the tailoring pipeline
+    // (resumeDocument.ts header/skills) keeps reading from one kept-in-sync source. Never touch
+    // resume_path. If the mirror fails the structured save still stands, so surface a soft error.
+    const { error: mirrorError } = await supabase
+      .from('profile')
+      .upsert({ id: user.id, ...structuredToProfilePayload(resume) }, { onConflict: 'id' });
+    setSaving(false);
+    if (mirrorError) {
+      setSaveError(`Saved your résumé, but syncing your profile details failed. ${mirrorError.message}`);
       return;
     }
     setConfirmedAt(record.confirmed_at);

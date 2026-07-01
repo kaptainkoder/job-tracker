@@ -1,6 +1,5 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import TrackerPage from '../features/tracker/TrackerPage';
-import ProfilePage from '../features/profile/ProfilePage';
 import ResumeReviewPage from '../features/resume/ResumeReviewPage';
 import SettingsPage from '../features/settings/SettingsPage';
 import PrivacyPage from '../features/privacy/PrivacyPage';
@@ -22,8 +21,9 @@ export default function App() {
           <Route element={<ProtectedRoute />}>
             <Route element={<AppShell />}>
               <Route path="/tracker" element={<TrackerPage />} />
-              <Route path="/profile" element={<ProfilePage />} />
-              <Route path="/resume" element={<ResumeReviewPage />} />
+              {/* Wave H — unified Profile: the section-aware structured-résumé editor is the single
+                  "who I am" surface. The former thin /profile and separate /resume are removed. */}
+              <Route path="/profile" element={<ResumeReviewPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/privacy" element={<PrivacyPage />} />
             </Route>
