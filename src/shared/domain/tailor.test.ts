@@ -6,6 +6,7 @@ import {
   buildResumeNumbers,
   buildTailorMessages,
   buildTailorResumeMessages,
+  cohereTailoredBullets,
   diffTailored,
   evidenceLikelyRecoverable,
   FOREIGN_TECH_DENYLIST,
@@ -135,6 +136,10 @@ const resume = JSON.parse(
   readFileSync('fixtures/resume-structured-sample.json', 'utf8'),
 ) as StructuredResume;
 
+const semanticBulletFixtures = JSON.parse(
+  readFileSync('fixtures/semantic-bullet-fragments.json', 'utf8'),
+) as Array<{ name: string; input: string[]; expected: string[] }>;
+
 // --- the structured-output contract (messages) ------------------------------------------------
 
 test('buildTailorResumeMessages carries the no-fabrication + JSON-only reword contract', () => {
@@ -149,6 +154,10 @@ test('buildTailorResumeMessages carries the no-fabrication + JSON-only reword co
   assert.match(system.content, /REWORD existing material/);
   // Holistic rewording contract: whole-résumé judgement, and roles are NOT reordered.
   assert.match(system.content, /HOLISTICALLY/);
+  assert.match(system.content, /finished résumé as one document/i);
+  assert.match(system.content, /both resulting bullets/i);
+  assert.match(system.content, /action and (?:its )?(?:result|impact)/i);
+  assert.match(system.content, /rewrite the whole bullet more concisely/i);
   assert.match(system.content, /Do NOT reorder roles/);
   assert.match(system.content, /ONLY a single JSON object/);
   // Layout-bearing sections are explicitly withheld from the model (locked, deterministic render).
@@ -158,6 +167,20 @@ test('buildTailorResumeMessages carries the no-fabrication + JSON-only reword co
   assert.match(user.content, /Kubernetes, Rust/);
   // The model is shown indexed experience entries to reference by ref.
   assert.match(user.content, /\[0\] Global Financial Services Co\. — Manager - Data Science/);
+});
+
+test('cohereTailoredBullets repairs the real dangling action/result fragments', () => {
+  for (const fixture of semanticBulletFixtures) {
+    assert.deepEqual(cohereTailoredBullets(fixture.input), fixture.expected, fixture.name);
+  }
+});
+
+test('cohereTailoredBullets leaves independently meaningful accomplishments separate', () => {
+  const bullets = [
+    'Developed a feature discovery workflow for model validation.',
+    'Reduced runtime by 5x through end-to-end platform migration.',
+  ];
+  assert.deepEqual(cohereTailoredBullets(bullets), bullets);
 });
 
 test('the structured tailor prompt never leaks contact-info (manifest parity with prose path)', () => {

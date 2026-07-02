@@ -192,46 +192,33 @@ export function splitMetricRuns(text: string): TextRun[] {
   return runs.length ? runs : [{ text, bold: false }];
 }
 
-// Break at whitespace that FOLLOWS a clause delimiter (comma / semicolon / colon / em-dash / a
-// sentence period), keeping the delimiter on the preceding clause. The look-behind + `\s` means a
-// decimal ("41.25%") or a "$15M in" never splits — only real clause breaks do.
-const CLAUSE_BREAK = /(?<=[,;:—])\s+|(?<=\.)\s+/;
-// Trailing clause punctuation to trim when a clause becomes its own bullet (keep a terminal period).
-const TRAILING_CLAUSE_PUNCT = /[\s,;:—]+$/;
-
-// Present one bullet as clean full-width single-line bullet(s) at a UNIFORM font size — never wrapped
-// and never per-bullet shrunk (the two things that made bullets look ragged / mismatched). When the
-// bullet is too wide for one line at the uniform size, it is split at clause boundaries into as many
-// bullets as needed, each greedily packed so every line looks full. `measure` returns the rendered
-// width of a candidate line at the uniform bullet size and `avail` is the usable line width. A single
-// clause still wider than `avail` is emitted alone (the caller floor-shrinks only that rare line so it
-// never clips). Pure + injectable `measure` so the packing is unit-testable without jsPDF.
-export function splitBulletForWidth(
+// Visual word-wrap for ONE semantic bullet. The previous renderer split at punctuation and painted
+// every piece with a fresh bullet marker, which turned "Led … model, driving $15M …" into two claims
+// even though the second was only the first claim's impact. Layout must never edit meaning: this
+// helper returns visual lines only; the caller paints a marker on line 0 and continuation indentation
+// thereafter. Pure + injectable `measure` keeps the packing unit-testable without jsPDF.
+export function wrapBulletForWidth(
   text: string,
   avail: number,
   measure: (line: string) => number,
 ): string[] {
   const whole = text.trim();
   if (!whole || measure(whole) <= avail) return [whole];
-  const clauses = whole.split(CLAUSE_BREAK).map((c) => c.trim()).filter(Boolean);
-  if (clauses.length <= 1) return [whole]; // nothing to split on — caller shrinks this one line
 
-  const clean = (line: string): string => {
-    const trimmed = line.replace(TRAILING_CLAUSE_PUNCT, '');
-    return trimmed.replace(/^([a-z])/, (m) => m.toUpperCase());
-  };
+  const words = whole.split(/\s+/).filter(Boolean);
+  if (words.length <= 1) return [whole]; // lone over-wide token: caller floor-shrinks, never clips
   const lines: string[] = [];
   let current = '';
-  for (const clause of clauses) {
-    const candidate = current ? `${current} ${clause}` : clause;
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
     if (current && measure(candidate) > avail) {
-      lines.push(clean(current));
-      current = clause;
+      lines.push(current);
+      current = word;
     } else {
       current = candidate;
     }
   }
-  if (current) lines.push(clean(current));
+  if (current) lines.push(current);
   return lines;
 }
 
@@ -343,36 +330,35 @@ function renderStructuredInto(
     y += lineHeight;
   };
 
-  // Bullets render at a UNIFORM size (the global density `sz(bullet)`) — never per-bullet shrunk and
-  // never wrapped. A bullet too wide for one line is split at clause boundaries into full single-line
-  // bullets so every line looks full and all bullets share one size; the global density loop absorbs
-  // the extra lines into one A4 page. Metric tokens stay bold. lineHeight is uniform so the vertical
-  // rhythm never jitters, even for the rare unsplittable clause that must floor-shrink to avoid clip.
+  // Bullets render at a UNIFORM global size. Long semantic bullets word-wrap, but only line 0 gets a
+  // bullet marker; continuation lines align with its text. The renderer therefore never turns visual
+  // fit into a new claim. Metric tokens stay bold, and the global density loop absorbs extra lines.
   const writeBullet = (text: string) => {
     const indent = 4.5;
     const avail = contentWidth - indent;
     const size = sz(STRUCT_SIZE.bullet);
     const lineHeight = size * 0.5 + 0.7;
-    const lines = splitBulletForWidth(
+    const lines = wrapBulletForWidth(
       text,
       avail,
       (line) => measureRunWidth(pdf, splitMetricRuns(line), fontFamily, size),
     );
-    for (const line of lines) {
+    lines.forEach((line, lineIndex) => {
       const runs = splitMetricRuns(line);
-      // Only a single clause that cannot be split further ever shrinks — and only that one line — so
-      // it never clips; every splittable bullet stays at the uniform size.
+      // Only a single word that cannot wrap further ever shrinks — and only that visual line.
       let drawSize = size;
       const w = measureRunWidth(pdf, runs, fontFamily, size);
       if (w > avail && w > 0) drawSize = Math.max(sz(6), (size * avail) / w);
       ensureSpace(lineHeight);
-      pdf.setFont(fontFamily, 'bold');
-      pdf.setFontSize(drawSize);
-      pdf.setTextColor(INK_SOFT);
-      pdf.text('•', MX + 0.5, y);
+      if (lineIndex === 0) {
+        pdf.setFont(fontFamily, 'bold');
+        pdf.setFontSize(drawSize);
+        pdf.setTextColor(INK_SOFT);
+        pdf.text('•', MX + 0.5, y);
+      }
       drawRunLine(pdf, runs, MX + indent, y, fontFamily, drawSize, INK_SOFT, INK);
       y += lineHeight;
-    }
+    });
   };
 
   // Wrapped runs (used for the skills line so the group label is bold and the items wrap normally).

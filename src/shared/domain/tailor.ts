@@ -228,8 +228,13 @@ const STRUCTURED_TAILOR_SYSTEM = [
   'WHOLE résumé and the WHOLE job description and understand the candidate’s overall story and what',
   'THIS role values most. Then reshape the content the way a sharp editor would: emphasise the',
   'experience that matters most here, reword in the job’s language, MERGE two overlapping bullets into',
-  'one stronger line, or SPLIT one overloaded bullet into two focused single-line bullets when it',
-  'carries two distinct results. Keep each role’s bullets coherent as a set, and avoid repeating the',
+  'one stronger line, or SPLIT one overloaded bullet only when it contains two genuinely independent',
+  'accomplishments. Both resulting bullets must make complete sense on their own: each needs a clear',
+  'action and its result, impact, purpose, or business context. Never separate an action from the',
+  'impact that explains why it mattered. If joining them verbatim would sound clumsy or run long,',
+  'rewrite the whole bullet more concisely instead of mechanically splicing two fragments. Keep each',
+  'role’s bullets coherent as a set, and avoid',
+  'repeating the',
   'same phrasing across roles. You may rephrase the summary, reword and reorder bullets WITHIN a role,',
   'tighten a scope line, and drop a bullet that is irrelevant to the job. Do NOT reorder roles — the',
   'résumé always stays in the source (reverse-chronological) order. You may NOT invent a role, award,',
@@ -243,14 +248,22 @@ const STRUCTURED_TAILOR_SYSTEM = [
   '- The Skills section itself is added deterministically by the app; do not restate skill lists.',
   '',
   'Hard constraints for the rewording:',
-  '- Keep each bullet CONCISE — one short, single-line sentence. Lead with the action + the metric.',
-  '  If a result would run long, split it into two focused single-line bullets rather than cramming.',
+  '- Keep each bullet concise and information-dense. Prefer a near-full résumé line (roughly 14–22',
+  '  words), but meaning wins over visual length. The renderer safely wraps a long semantic bullet;',
+  '  NEVER create a dangling result fragment merely to force every bullet onto one visual line.',
+  '- Lead with a concrete action and connect it to its metric, result, purpose, or business context.',
   '- Reword in the job’s vocabulary, but ONLY by inference grounded in the source bullet or evidence.',
   '  Never name a tool, platform, or domain the candidate has not used (e.g. AWS, Snowflake, Azure,',
   '  Databricks, Hadoop, Kafka, AML) — use only the candidate’s own stack.',
   '- Keep every number EXACTLY as it appears in the source or evidence ($15M stays $15M, 41.25% stays',
   '  41.25%). Never introduce a new number or metric.',
   '- Do not add Markdown emphasis; the renderer bolds key metrics and skills automatically.',
+  '',
+  'Before returning JSON, silently review the finished résumé as one document — not as isolated',
+  'sentences. Check the summary-to-experience story, section emphasis for this job, bullet sequence',
+  'within every role, duplicated ideas, choppy fragments, and action-to-impact completeness. Rewrite',
+  'anything awkward. A reader must be able to understand every bullet on its own and the résumé as a',
+  'clean, coherent whole. Do not mention this editorial check in the output.',
   '',
   'Return ONLY a single JSON object (no prose, no Markdown, no code fence) of this exact shape:',
   '{',
@@ -480,6 +493,31 @@ function mergeConfirmedSkills(skills: ResumeSkillGroup[], confirmed: readonly st
   return skills.map((group, i) => (i === 0 ? { ...group, items: [...group.items, ...fresh] } : group));
 }
 
+// A model can still return an action and its impact as adjacent bullets despite the editorial
+// contract. These leading participles/result phrases are grammatical continuations, not independent
+// résumé accomplishments (the production failure was `Led … model` + `Driving $15M …`). Merge only
+// that narrow, deterministic class back into the preceding bullet. This preserves every word and
+// metric; it does not attempt to "write" résumé prose or merge a second past-tense action.
+const DANGLING_IMPACT_START = /^(?:achieving|boosting|contributing|creating|cutting|delivering|driving|enabling|generating|improving|increasing|leading\s+to|reducing|resulting\s+in|saving|yielding)\b/i;
+
+export function cohereTailoredBullets(bullets: readonly string[]): string[] {
+  const coherent: string[] = [];
+  for (const raw of bullets) {
+    const bullet = raw.trim();
+    if (!bullet) continue;
+    const prior = coherent[coherent.length - 1];
+    if (!prior || !DANGLING_IMPACT_START.test(bullet)) {
+      coherent.push(bullet);
+      continue;
+    }
+
+    const stem = prior.replace(/[\s,;:—.]+$/, '');
+    const continuation = bullet.replace(/^([A-Z])/, (letter) => letter.toLowerCase());
+    coherent[coherent.length - 1] = `${stem}, ${continuation}`;
+  }
+  return coherent;
+}
+
 export function applyTailoredResume(
   source: StructuredResume,
   patch: TailoredResumePatch,
@@ -509,13 +547,14 @@ export function applyTailoredResume(
     const reworded = byRef.get(i);
     // Grounded guard: keep only reworded bullets that pass; drop the rest. If nothing survives the
     // role keeps its source bullets, so a role is never emptied and no fabricated bullet renders.
-    const keptBullets = reworded
+    const groundedBullets = reworded
       ? reworded.bullets
           .map((b) => groundReword(b, numbers, allowed))
           .filter((b): b is string => b !== null)
           .map((b) => b.trim())
           .filter(Boolean)
       : [];
+    const keptBullets = cohereTailoredBullets(groundedBullets);
     const rewordedScope =
       reworded && typeof reworded.scope === 'string' && reworded.scope.trim()
         ? groundReword(reworded.scope.trim(), numbers, allowed)

@@ -1,0 +1,22 @@
+[
+  {
+    "name": "balance model action and revenue impact",
+    "input": [
+      "Led end-to-end build and launch of an s-learner XGBoost incremental Balance Model",
+      "Driving $15M in annual incremental revenue through improved targeting precision."
+    ],
+    "expected": [
+      "Led end-to-end build and launch of an s-learner XGBoost incremental Balance Model, driving $15M in annual incremental revenue through improved targeting precision."
+    ]
+  },
+  {
+    "name": "feature discovery action and model impact",
+    "input": [
+      "Developed a custom GPT-based Feature Discovery solution",
+      "Generating 10+ novel features to boost model performance for the high-spend decliners segment."
+    ],
+    "expected": [
+      "Developed a custom GPT-based Feature Discovery solution, generating 10+ novel features to boost model performance for the high-spend decliners segment."
+    ]
+  }
+]
