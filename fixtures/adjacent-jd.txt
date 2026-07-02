@@ -1,0 +1,15 @@
+Applied AI Engineer — Generative AI Platform
+
+We are building applied AI products and need an engineer to take models from
+notebook to production.
+
+Requirements:
+- Strong Python for model development and evaluation
+- Hands-on deep learning with PyTorch
+- Solid grounding in machine learning fundamentals
+
+Nice to have:
+- AWS for training and serving infrastructure
+- Docker for reproducible environments
+
+This is a credible adjacent move for a data scientist deepening into applied AI.

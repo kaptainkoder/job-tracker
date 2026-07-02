@@ -9,7 +9,7 @@ import {
   Sparkles,
   Trash2,
 } from 'lucide-react';
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import type { Application, Artifact, Outcome, Profile, Stage } from '../../shared/types';
 import { STAGES, STAGE_LABEL, isStale } from '../../shared/domain/stages';
 import { supabase } from '../../shared/lib/supabase';
@@ -42,6 +42,9 @@ import {
   parseStructuredResumeJson,
   type StructuredResume,
 } from '../../shared/domain/resume';
+import { computeFit } from '../../shared/domain/fit';
+import { loadStructuredResume } from '../resume/resumeStore';
+import FitPanel from './FitPanel';
 
 interface ApplicationDetailProps {
   application: Application;
@@ -86,6 +89,9 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
   const [pdfDocument, setPdfDocument] = useState<ResumeDocument | null>(null);
   const [pdfResume, setPdfResume] = useState<StructuredResume | null>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
+  // G4: the confirmed structured-résumé skills drive the deterministic profile-fit panel (same
+  // source of truth as the tailor flow — never the flat profile mirror).
+  const [structuredSkills, setStructuredSkills] = useState<string[] | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -126,6 +132,33 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
       active = false;
     };
   }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+    void loadStructuredResume(user.id)
+      .then(({ record }) => {
+        if (!active) return;
+        // resume_structured.content is JSONB (an object), gated on confirmed_at — same source the
+        // tailor flow reads. This is the single skills source of truth (never the flat profile mirror).
+        const resume = record?.confirmed_at ? (record.content as StructuredResume) : null;
+        setStructuredSkills(resume ? resume.skills.flatMap((g) => g.items) : []);
+      })
+      .catch(() => {
+        if (active) setStructuredSkills([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [user]);
+
+  const jdText = application.jd_text?.trim() ?? '';
+  const fit = useMemo(
+    () => (jdText && structuredSkills && structuredSkills.length > 0
+      ? computeFit({ jdText, evidence: structuredSkills })
+      : null),
+    [jdText, structuredSkills],
+  );
 
   useEffect(() => {
     let active = true;
@@ -323,6 +356,13 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
           <Row label="Notes">{value(application.notes)}</Row>
           <Row label="Job description">{value(application.jd_text)}</Row>
         </dl>
+
+        {fit && <FitPanel fit={fit} />}
+        {jdText && structuredSkills !== null && structuredSkills.length === 0 && (
+          <p className="rounded-xl border border-dashed border-line px-4 py-3 text-sm text-ink-faint">
+            Add your skills in <span className="font-medium text-ink">Profile</span> to see how this role fits your evidenced experience.
+          </p>
+        )}
 
         <section aria-labelledby="artifacts-heading">
           <div className="mb-2 flex items-center justify-between">

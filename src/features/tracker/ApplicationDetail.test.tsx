@@ -90,13 +90,13 @@ async function waitForText(text: RegExp) {
   assert.match(document.body.textContent ?? '', text);
 }
 
-async function mount() {
+async function mount(app: Application = APP) {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
     root.render(
-      <ApplicationDetail application={APP} onClose={() => {}} onEdit={() => {}} onChanged={() => {}} />,
+      <ApplicationDetail application={app} onClose={() => {}} onEdit={() => {}} onChanged={() => {}} />,
     );
   });
   return {
@@ -154,6 +154,33 @@ await test('control: a valid (today) outcome date does insert exactly once', asy
 
   // Proves the harness genuinely drives the submit path — so the zero-insert above is meaningful.
   assert.equal(inserts().length, 1, 'a valid date inserts exactly one outcome');
+
+  await cleanup();
+});
+
+await test('G4: profile-fit panel classifies required/preferred + surfaces a missing-required, no ATS %', async () => {
+  inserts().length = 0;
+  rows().artifacts = [];
+  // Stub structured résumé evidences SQL. JD requires SQL (evidenced) + Python (missing) and lists
+  // AWS as a nice-to-have (preferred). The panel should render a band, classify both, and never %.
+  const jdApp: Application = {
+    ...APP,
+    jd_text:
+      'Data Analyst\n\nRequirements:\n- SQL for production analytics\n- Python for scripting\n\nNice to have:\n- AWS for the warehouse',
+  };
+  const { cleanup } = await mount(jdApp);
+  await waitForText(/Profile fit/);
+
+  const body = document.body.textContent ?? '';
+  // Band + confidence rendered.
+  assert.match(body, /(High|Medium|Low) fit/);
+  assert.match(body, /confidence/);
+  // SQL evidenced, Python surfaced as missing required (job not hidden), AWS classified preferred.
+  assert.match(body, /Missing required evidence: .*Python/);
+  assert.match(body, /Preferred/);
+  // Hard rule: never an ATS percentage.
+  assert.doesNotMatch(body, /%/);
+  assert.match(body, /not an ATS match score/i);
 
   await cleanup();
 });
