@@ -66,7 +66,6 @@ npm run gate                 # typecheck + build + domain tests
 ```
 
 Every wave ships behind this gate; live-data and browser flows are verified by a second
-agent (Codex) against staged test scripts in `docs/codex-tests/`.
+agent (Codex) against staged verification scripts before release.
 
-> Scope and acceptance criteria live in [`KICKOFF_BRIEF.md`](./KICKOFF_BRIEF.md); operational
-> click-paths in [`docs/RUNBOOK.md`](./docs/RUNBOOK.md).
+> Operational click-paths (Supabase, Vercel, deploy) live in [`docs/RUNBOOK.md`](./docs/RUNBOOK.md).
