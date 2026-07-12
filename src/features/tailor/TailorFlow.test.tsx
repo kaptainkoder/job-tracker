@@ -12,6 +12,8 @@ interface TestGlobals {
   __SUPABASE_UPDATES__: Array<Record<string, unknown>>;
   __SUPABASE_ROWS__: Record<string, ({ content?: unknown } & Record<string, unknown>) | null>;
   __COPIED_TEXT__?: string;
+  __TAILOR_LLM_RESPONSE__?: string;
+  __STRUCTURED_LAYOUT_DIAGNOSTICS__?: Record<string, unknown>;
 }
 const globals = globalThis as unknown as TestGlobals;
 const state = (globals.__DOM_TEST_STATE__ ??= { failures: 0 });
@@ -111,6 +113,11 @@ async function main() {
     await waitForText(/Your saved tailoring kit/i);
 
     assert.deepEqual(globals.__LLM_CALLS__.map((call) => call.action), ['tailor', 'cover', 'prep']);
+    assert.deepEqual(
+      (globals.__LLM_CALLS__[0] as unknown as { includedCategories: string[] }).includedCategories,
+      ['job-description', 'profile-summary', 'work-history', 'skills', 'education', 'resume'],
+      'the exact tailor preflight/audit must disclose the complete redacted résumé payload',
+    );
     assert.equal(globals.__SUPABASE_INSERTS__.length, 3);
     assert.deepEqual(
       globals.__SUPABASE_INSERTS__.map((row) => row.kind),
@@ -164,6 +171,65 @@ async function main() {
     }
     assert.ok(savedFromCache, 'in-preview Download saves cached bytes (no click-time network)');
     await cleanup();
+  });
+
+  await test('an incomplete one-call editorial plan fails closed with no artifact or automatic repair call', async () => {
+    globals.__LLM_CALLS__.length = 0;
+    globals.__SUPABASE_INSERTS__.length = 0;
+    globals.__TAILOR_LLM_RESPONSE__ = '{"experience":[]}';
+    try {
+      const cleanup = await mount();
+      await act(async () => click('Review privacy & continue'));
+      await act(async () => click('Not in my experience'));
+      await act(async () => click('Generate the kit'));
+      await act(async () => click('Approve & send'));
+      await waitForText(/incomplete editorial plan/i);
+
+      assert.deepEqual(
+        globals.__LLM_CALLS__.map((call) => call.action),
+        ['tailor'],
+        'invalid output must not trigger a repair call or advance to cover',
+      );
+      assert.equal(globals.__SUPABASE_INSERTS__.length, 0, 'invalid plan must persist nothing');
+      await cleanup();
+    } finally {
+      delete globals.__TAILOR_LLM_RESPONSE__;
+    }
+  });
+
+  await test('a post-generation layout overflow names the count and persists no tailored artifact', async () => {
+    globals.__LLM_CALLS__.length = 0;
+    globals.__SUPABASE_INSERTS__.length = 0;
+    globals.__STRUCTURED_LAYOUT_DIAGNOSTICS__ = {
+      pageCount: 1,
+      contentBottomMm: 250,
+      usableBottomMm: 285,
+      utilization: 0.85,
+      scale: 1,
+      minRelevantFontSizePt: 7.8,
+      bulletFontSizePt: 8.8,
+      bulletAvailableWidthMm: 181.5,
+      bullets: [],
+      overflows: [{ text: 'Too long', availableWidthMm: 181.5, measuredWidthMm: 190, fillRatio: 1.05, overflowMm: 8.5, fitsSingleLine: false }],
+      fitsSinglePage: true,
+      hasPageOverflow: false,
+      hasClipping: true,
+      isValid: false,
+    };
+    try {
+      const cleanup = await mount();
+      await act(async () => click('Review privacy & continue'));
+      await act(async () => click('Not in my experience'));
+      await act(async () => click('Generate the kit'));
+      await act(async () => click('Approve & send'));
+      await waitForText(/1 bullet exceeded the measured line width/i);
+
+      assert.deepEqual(globals.__LLM_CALLS__.map((call) => call.action), ['tailor']);
+      assert.equal(globals.__SUPABASE_INSERTS__.length, 0, 'invalid layout must persist no artifact');
+      await cleanup();
+    } finally {
+      delete globals.__STRUCTURED_LAYOUT_DIAGNOSTICS__;
+    }
   });
 
   await test('Escape closes only the PDF preview and keeps saved Tailor results open', async () => {
@@ -277,6 +343,28 @@ async function main() {
     assert.match(panelBefore(), /analytics reporting/i, 'panel shows reworded text pre-restore');
     // No re-persist has fired yet — the initial save at generation is the only write so far.
     assert.equal(globals.__SUPABASE_UPDATES__.length, 0, 'no edit yet ⇒ no re-persist');
+
+    await act(async () => click('Edit'));
+    const editor = document.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Edit bullets for Data engineer at Example Co"]',
+    );
+    assert.ok(editor, 'role bullets become an inline editor');
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+      setValue?.call(editor, 'Built SQL pipelines for reliable analytics reporting.');
+      editor!.dispatchEvent(new window.Event('input', { bubbles: true }));
+    });
+    for (let i = 0; i < 40 && globals.__SUPABASE_UPDATES__.length === 0; i += 1) {
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
+    }
+    assert.ok(globals.__SUPABASE_UPDATES__.length >= 1, 'inline edit must revalidate then re-persist');
+    const inlinePersisted = JSON.parse(String(globals.__SUPABASE_UPDATES__.at(-1)?.content));
+    assert.deepEqual(
+      inlinePersisted.experience[0].bullets,
+      ['Built SQL pipelines for reliable analytics reporting.'],
+      'the persisted canonical artifact contains the inline edit',
+    );
+    assert.match(panelBefore(), /reliable analytics reporting/, 'the preview source updates with the persisted edit');
 
     await act(async () => click('Restore original'));
 

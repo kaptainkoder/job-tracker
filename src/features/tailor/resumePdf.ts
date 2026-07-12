@@ -192,45 +192,76 @@ export function splitMetricRuns(text: string): TextRun[] {
   return runs.length ? runs : [{ text, bold: false }];
 }
 
-// Visual word-wrap for ONE semantic bullet. The previous renderer split at punctuation and painted
-// every piece with a fresh bullet marker, which turned "Led … model, driving $15M …" into two claims
-// even though the second was only the first claim's impact. Layout must never edit meaning: this
-// helper returns visual lines only; the caller paints a marker on line 0 and continuation indentation
-// thereafter. Pure + injectable `measure` keeps the packing unit-testable without jsPDF.
-export function wrapBulletForWidth(
-  text: string,
-  avail: number,
-  measure: (line: string) => number,
-): string[] {
-  const whole = text.trim();
-  if (!whole || measure(whole) <= avail) return [whole];
-
-  const words = whole.split(/\s+/).filter(Boolean);
-  if (words.length <= 1) return [whole]; // lone over-wide token: caller floor-shrinks, never clips
-  const lines: string[] = [];
-  let current = '';
-  for (const word of words) {
-    const candidate = current ? `${current} ${word}` : word;
-    if (current && measure(candidate) > avail) {
-      lines.push(current);
-      current = word;
-    } else {
-      current = candidate;
-    }
-  }
-  if (current) lines.push(current);
-  return lines;
-}
-
-// Base (scale = 1) point sizes. The renderer multiplies these by a density `scale` chosen to land
-// the whole résumé on one A4 page (down to FLOOR), then renders once at that scale.
-const STRUCT = { marginX: 16, marginTop: 14, marginBottom: 12 } as const;
-const STRUCT_FLOOR = 0.6;
+// Structured résumés use one fixed, readable template density. Content that does not fit is an
+// editorial validation error; layout never repairs it by wrapping or shrinking semantic bullets.
+const STRUCT = { marginX: 12, marginTop: 14, marginBottom: 12 } as const;
+const STRUCT_SCALE = 1;
 const STRUCT_SIZE = {
   name: 18, title: 9.6, contact: 8.4, heading: 9.5, summary: 9,
   awardTitle: 8.6, awardDetail: 7.8, org: 9.6, role: 9.2, scope: 8.6,
   bullet: 8.8, proj: 9.4, school: 9.4, degree: 8.8, skills: 8.8,
 } as const;
+
+const BULLET_INDENT_MM = 4.5;
+const WIDTH_EPSILON_MM = 0.01;
+export const STRUCTURED_RESUME_BULLET_AVAILABLE_WIDTH_MM =
+  PAGE.width - STRUCT.marginX * 2 - BULLET_INDENT_MM;
+export const STRUCTURED_RESUME_BULLET_FONT_SIZE_PT = STRUCT_SIZE.bullet * STRUCT_SCALE;
+
+export interface StructuredResumeBulletWidth {
+  text: string;
+  availableWidthMm: number;
+  measuredWidthMm: number;
+  fillRatio: number;
+  overflowMm: number;
+  fitsSingleLine: boolean;
+}
+
+export interface StructuredResumeLayoutDiagnostics {
+  pageCount: number;
+  contentBottomMm: number;
+  usableBottomMm: number;
+  utilization: number;
+  scale: number;
+  minRelevantFontSizePt: number;
+  bulletFontSizePt: number;
+  bulletAvailableWidthMm: number;
+  bullets: StructuredResumeBulletWidth[];
+  overflows: StructuredResumeBulletWidth[];
+  fitsSinglePage: boolean;
+  hasPageOverflow: boolean;
+  hasClipping: boolean;
+  isValid: boolean;
+}
+
+export interface StructuredResumeLayoutContract {
+  pageWidthMm: number;
+  pageHeightMm: number;
+  marginXmm: number;
+  marginTopMm: number;
+  marginBottomMm: number;
+  bulletIndentMm: number;
+  bulletAvailableWidthMm: number;
+  bulletFontSizePt: number;
+  preferredBulletFillRatio: { min: number; max: number };
+  scale: number;
+}
+
+/** Numeric layout contract to include verbatim in the one-pass editorial prompt. */
+export function getStructuredResumeLayoutContract(): StructuredResumeLayoutContract {
+  return {
+    pageWidthMm: PAGE.width,
+    pageHeightMm: PAGE.height,
+    marginXmm: STRUCT.marginX,
+    marginTopMm: STRUCT.marginTop,
+    marginBottomMm: STRUCT.marginBottom,
+    bulletIndentMm: BULLET_INDENT_MM,
+    bulletAvailableWidthMm: STRUCTURED_RESUME_BULLET_AVAILABLE_WIDTH_MM,
+    bulletFontSizePt: STRUCTURED_RESUME_BULLET_FONT_SIZE_PT,
+    preferredBulletFillRatio: { min: 0.75, max: 1 },
+    scale: STRUCT_SCALE,
+  };
+}
 
 // Width of a sequence of runs at a fixed font size (bold runs measured with the bold face).
 function measureRunWidth(pdf: jsPDF, runs: TextRun[], fontFamily: string, size: number): number {
@@ -241,6 +272,57 @@ function measureRunWidth(pdf: jsPDF, runs: TextRun[], fontFamily: string, size: 
     width += pdf.getTextWidth(run.text);
   }
   return width;
+}
+
+function makeStructuredPdf(
+  resume: Pick<StructuredResume, 'contact'>,
+  interFontBase64?: string,
+): { pdf: jsPDF; fontFamily: string } {
+  const pdf = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
+  const fontFamily = interFontBase64 ? 'Inter' : 'helvetica';
+  if (interFontBase64) {
+    pdf.addFileToVFS('InterVariable.ttf', interFontBase64);
+    pdf.addFont('InterVariable.ttf', 'Inter', 'normal');
+    pdf.addFont('InterVariable.ttf', 'Inter', 'bold');
+  }
+  pdf.setProperties({
+    title: `${resume.contact.fullName} — résumé`,
+    subject: resume.contact.title,
+    creator: 'Job Tracker',
+  });
+  return { pdf, fontFamily };
+}
+
+/** Exact jsPDF/Inter measurements used by the renderer, suitable for ranking LLM candidates. */
+export function analyzeStructuredResumeBulletWidths(
+  candidates: readonly string[],
+  interFontBase64?: string,
+): StructuredResumeBulletWidth[] {
+  const { pdf, fontFamily } = makeStructuredPdf(
+    { contact: { fullName: '', title: '', links: [] } },
+    interFontBase64,
+  );
+  return candidates.map((candidate) => {
+    const text = candidate.trim();
+    const measuredWidthMm = measureRunWidth(
+      pdf,
+      splitMetricRuns(text),
+      fontFamily,
+      STRUCTURED_RESUME_BULLET_FONT_SIZE_PT,
+    );
+    const rawOverflowMm = measuredWidthMm - STRUCTURED_RESUME_BULLET_AVAILABLE_WIDTH_MM;
+    const overflowMm = rawOverflowMm > WIDTH_EPSILON_MM ? rawOverflowMm : 0;
+    return {
+      text,
+      availableWidthMm: STRUCTURED_RESUME_BULLET_AVAILABLE_WIDTH_MM,
+      measuredWidthMm,
+      fillRatio: STRUCTURED_RESUME_BULLET_AVAILABLE_WIDTH_MM > 0
+        ? measuredWidthMm / STRUCTURED_RESUME_BULLET_AVAILABLE_WIDTH_MM
+        : 0,
+      overflowMm,
+      fitsSingleLine: overflowMm === 0,
+    };
+  });
 }
 
 // Draw a sequence of runs on ONE baseline at a fixed size (no wrapping); bold runs use boldColor.
@@ -269,6 +351,7 @@ function renderStructuredInto(
   scale: number,
   fontFamily: string,
   paginate: boolean,
+  bulletDiagnostics: StructuredResumeBulletWidth[],
 ): number {
   const { marginX: MX, marginTop: MT, marginBottom: MB } = STRUCT;
   const contentWidth = PAGE.width - MX * 2;
@@ -299,8 +382,7 @@ function renderStructuredInto(
     }
   };
 
-  // A header row: left text shrunk-to-fit (never clipped) on one line, with an optional right-aligned
-  // meta string (dates / location) on the same baseline.
+  // A fixed-size header row with an optional right-aligned meta string on the same baseline.
   const writeRow = (
     left: string,
     right: string | undefined,
@@ -308,57 +390,45 @@ function renderStructuredInto(
   ) => {
     const lineHeight = options.leftSize * 0.5 + 0.6;
     ensureSpace(lineHeight);
-    let rightWidth = 0;
     if (right) {
       pdf.setFont(fontFamily, 'normal');
       pdf.setFontSize(sz(STRUCT_SIZE.contact));
-      rightWidth = pdf.getTextWidth(right) + 3;
       pdf.setTextColor(INK_FAINT);
       pdf.text(right, rightX, y, { align: 'right' });
     }
-    const avail = contentWidth - rightWidth;
-    let leftSize = options.leftSize;
     pdf.setFont(fontFamily, options.leftBold ? 'bold' : 'normal');
-    pdf.setFontSize(leftSize);
-    const w = pdf.getTextWidth(left);
-    if (w > avail && w > 0) {
-      leftSize = Math.max(sz(6.2), (options.leftSize * avail) / w);
-      pdf.setFontSize(leftSize);
-    }
+    pdf.setFontSize(options.leftSize);
     pdf.setTextColor(options.leftColor);
     pdf.text(left, MX, y);
     y += lineHeight;
   };
 
-  // Bullets render at a UNIFORM global size. Long semantic bullets word-wrap, but only line 0 gets a
-  // bullet marker; continuation lines align with its text. The renderer therefore never turns visual
-  // fit into a new claim. Metric tokens stay bold, and the global density loop absorbs extra lines.
+  // Every semantic bullet is exactly one rendered line at the template's uniform size. An overflow
+  // is exposed in diagnostics so callers can reject the editorial result before save.
   const writeBullet = (text: string) => {
-    const indent = 4.5;
-    const avail = contentWidth - indent;
+    const indent = BULLET_INDENT_MM;
     const size = sz(STRUCT_SIZE.bullet);
     const lineHeight = size * 0.5 + 0.7;
-    const lines = wrapBulletForWidth(
-      text,
-      avail,
-      (line) => measureRunWidth(pdf, splitMetricRuns(line), fontFamily, size),
-    );
-    lines.forEach((line, lineIndex) => {
-      const runs = splitMetricRuns(line);
-      // Only a single word that cannot wrap further ever shrinks — and only that visual line.
-      let drawSize = size;
-      const w = measureRunWidth(pdf, runs, fontFamily, size);
-      if (w > avail && w > 0) drawSize = Math.max(sz(6), (size * avail) / w);
-      ensureSpace(lineHeight);
-      if (lineIndex === 0) {
-        pdf.setFont(fontFamily, 'bold');
-        pdf.setFontSize(drawSize);
-        pdf.setTextColor(INK_SOFT);
-        pdf.text('•', MX + 0.5, y);
-      }
-      drawRunLine(pdf, runs, MX + indent, y, fontFamily, drawSize, INK_SOFT, INK);
-      y += lineHeight;
+    const trimmed = text.trim();
+    const runs = splitMetricRuns(trimmed);
+    const measuredWidthMm = measureRunWidth(pdf, runs, fontFamily, size);
+    const rawOverflowMm = measuredWidthMm - STRUCTURED_RESUME_BULLET_AVAILABLE_WIDTH_MM;
+    const overflowMm = rawOverflowMm > WIDTH_EPSILON_MM ? rawOverflowMm : 0;
+    bulletDiagnostics.push({
+      text: trimmed,
+      availableWidthMm: STRUCTURED_RESUME_BULLET_AVAILABLE_WIDTH_MM,
+      measuredWidthMm,
+      fillRatio: measuredWidthMm / STRUCTURED_RESUME_BULLET_AVAILABLE_WIDTH_MM,
+      overflowMm,
+      fitsSingleLine: overflowMm === 0,
     });
+    ensureSpace(lineHeight);
+    pdf.setFont(fontFamily, 'bold');
+    pdf.setFontSize(size);
+    pdf.setTextColor(INK_SOFT);
+    pdf.text('•', MX + 0.5, y);
+    drawRunLine(pdf, runs, MX + indent, y, fontFamily, size, INK_SOFT, INK);
+    y += lineHeight;
   };
 
   // Wrapped runs (used for the skills line so the group label is bold and the items wrap normally).
@@ -511,37 +581,8 @@ function renderStructuredInto(
 
 export function createStructuredResumePdf(resume: StructuredResume, interFontBase64?: string): jsPDF {
   const doc = buildStructuredResumeDocument(resume);
-  const fontFamily = interFontBase64 ? 'Inter' : 'helvetica';
-
-  const makePdf = (): jsPDF => {
-    const pdf = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
-    if (interFontBase64) {
-      pdf.addFileToVFS('InterVariable.ttf', interFontBase64);
-      pdf.addFont('InterVariable.ttf', 'Inter', 'normal');
-      pdf.addFont('InterVariable.ttf', 'Inter', 'bold');
-    }
-    pdf.setProperties({
-      title: `${resume.contact.fullName} — résumé`,
-      subject: resume.contact.title,
-      creator: 'Job Tracker',
-    });
-    return pdf;
-  };
-
-  // Pick the LARGEST density scale (1.0 → FLOOR) whose measured height fits one A4 page. Measurement
-  // uses a throwaway pdf with the same font so text metrics match the final render exactly.
-  const fitBottom = PAGE.height - STRUCT.marginBottom;
-  let scale = STRUCT_FLOOR;
-  for (let step = 100; step >= Math.round(STRUCT_FLOOR * 100); step -= 5) {
-    const candidate = step / 100;
-    if (renderStructuredInto(makePdf(), doc, candidate, fontFamily, false) <= fitBottom) {
-      scale = candidate;
-      break;
-    }
-  }
-
-  const pdf = makePdf();
-  renderStructuredInto(pdf, doc, scale, fontFamily, true);
+  const { pdf, fontFamily } = makeStructuredPdf(resume, interFontBase64);
+  renderStructuredInto(pdf, doc, STRUCT_SCALE, fontFamily, true, []);
 
   // Page numbers only when the résumé genuinely spilled past one page.
   const pageCount = pdf.getNumberOfPages();
@@ -557,7 +598,63 @@ export function createStructuredResumePdf(resume: StructuredResume, interFontBas
   return pdf;
 }
 
+/** Performs the production render and returns its strict pre-save layout gate. */
+export function analyzeStructuredResumeLayout(
+  resume: StructuredResume,
+  interFontBase64?: string,
+): StructuredResumeLayoutDiagnostics {
+  const doc = buildStructuredResumeDocument(resume);
+  const { pdf, fontFamily } = makeStructuredPdf(resume, interFontBase64);
+  const bullets: StructuredResumeBulletWidth[] = [];
+  const finalY = renderStructuredInto(pdf, doc, STRUCT_SCALE, fontFamily, true, bullets);
+  const pageCount = pdf.getNumberOfPages();
+  const usableHeight = PAGE.height - STRUCT.marginTop - STRUCT.marginBottom;
+  const consumedHeight = (pageCount - 1) * usableHeight + (finalY - STRUCT.marginTop);
+  const overflows = bullets.filter((bullet) => !bullet.fitsSingleLine);
+  const fitsSinglePage = pageCount === 1 && finalY <= PAGE.height - STRUCT.marginBottom;
+  const hasPageOverflow = !fitsSinglePage;
+  const hasClipping = hasPageOverflow || overflows.length > 0;
+  return {
+    pageCount,
+    contentBottomMm: finalY,
+    usableBottomMm: PAGE.height - STRUCT.marginBottom,
+    utilization: consumedHeight / usableHeight,
+    scale: STRUCT_SCALE,
+    minRelevantFontSizePt: Math.min(
+      STRUCT_SIZE.awardDetail,
+      STRUCT_SIZE.contact,
+      STRUCT_SIZE.scope,
+      STRUCT_SIZE.bullet,
+      STRUCT_SIZE.degree,
+      STRUCT_SIZE.skills,
+    ) * STRUCT_SCALE,
+    bulletFontSizePt: STRUCTURED_RESUME_BULLET_FONT_SIZE_PT,
+    bulletAvailableWidthMm: STRUCTURED_RESUME_BULLET_AVAILABLE_WIDTH_MM,
+    bullets,
+    overflows,
+    fitsSinglePage,
+    hasPageOverflow,
+    hasClipping,
+    isValid: fitsSinglePage && !hasClipping,
+  };
+}
+
+function invalidStructuredResumeLayoutError(
+  diagnostics: StructuredResumeLayoutDiagnostics,
+): Error {
+  const detail = diagnostics.overflows.length
+    ? `${diagnostics.overflows.length} bullet${diagnostics.overflows.length === 1 ? '' : 's'} exceeded the measured line width.`
+    : diagnostics.hasPageOverflow
+      ? `The one-page policy failed (${diagnostics.pageCount} pages rendered).`
+      : 'The rendered layout is clipped.';
+  return new Error(`Structured résumé PDF blocked: ${detail}`);
+}
+
 export function structuredResumePdfBytes(resume: StructuredResume, interFontBase64?: string): Uint8Array {
+  // This is the public byte boundary used by both preview and download. Keep the low-level
+  // renderer callable for diagnostics, but never let an invalid production-font layout escape.
+  const diagnostics = analyzeStructuredResumeLayout(resume, interFontBase64);
+  if (!diagnostics.isValid) throw invalidStructuredResumeLayoutError(diagnostics);
   return new Uint8Array(createStructuredResumePdf(resume, interFontBase64).output('arraybuffer'));
 }
 

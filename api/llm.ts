@@ -253,8 +253,8 @@ export async function handleLlm(req: VercelRequest, res: VercelResponse, deps: L
   // tailor / cover / prep / parse-resume: real generation from a client-assembled payload. The
   // messages + manifest come from the browser (tailor.ts / resumeParse.ts); the hash is computed
   // HERE over the exact body sent, and the audit row is written BEFORE egress — fail closed (503,
-  // zero provider calls) if it can't land. parse-resume is the one-time onboarding extraction: it
-  // returns a full StructuredResume JSON, so it gets a larger token budget than a tailor reword.
+  // zero provider calls) if it can't land. parse-resume and the single-call holistic résumé editor
+  // both return substantial structured JSON, so their action-specific budgets exceed cover/prep.
   if (tailorAction || parseResume) {
     if (!process.env.OPENROUTER_API_KEY) {
       res.status(503).json({ error: 'OPENROUTER_API_KEY is not set on the server.' });
@@ -265,10 +265,15 @@ export async function handleLlm(req: VercelRequest, res: VercelResponse, deps: L
       res.status(400).json({ error: parsed.error });
       return;
     }
+    // The structured résumé action returns one self-contained holistic editorial plan: complete
+    // source accounting, explicit omissions, and multiple width-targeted candidates per claim.
+    // Give that SINGLE call enough room to finish its audit instead of truncating JSON and tempting
+    // a repair call (which is deliberately forbidden). Cover/prep remain compact prose calls.
+    const generationTokens = parseResume ? 4000 : tailorAction === 'tailor' ? 6000 : 1500;
     openRouterBody = buildOpenRouterBody({
       model: parsed.model,
       messages: parsed.messages,
-      maxTokens: parseResume ? 4000 : 1500,
+      maxTokens: generationTokens,
       noLog: parsed.noLog,
       usage: true,
     });

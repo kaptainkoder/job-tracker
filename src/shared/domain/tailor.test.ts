@@ -13,17 +13,22 @@ import {
   groundReword,
   isCloseFit,
   isTailorAction,
+  finalizeTailoredEditorialPlan,
+  isDanglingImpactFragment,
+  parseTailoredEditorialPlan,
   parseTailoredResumePatch,
   pruneOptionalForRelevance,
   TAILOR_ACTIONS,
   TAILOR_PRIVACY_ACTION,
   tailorIncludedCategories,
   tailorStructuredResume,
+  validateTailoredEditorialPlan,
+  type TailoredEditorialAudit,
+  type TailoredEditorialPlan,
   type TailorContext,
 } from './tailor';
 import { flattenResumeText, buildStructuredResumeDocument, type StructuredResume } from './resume';
 import { computeGap } from './gap';
-import { createStructuredResumePdf } from '../../features/tailor/resumePdf';
 
 // A representative context: one confirmed (evidenced) addition and one declined gap.
 function ctx(action: TailorContext['action']): TailorContext {
@@ -64,12 +69,17 @@ test('privacy-log action slugs match the locked vocabulary', () => {
 
 // --- included categories drive the manifest ---------------------------------------------------
 
-test('tailor + prep send JD/profile/work/skills but NOT contact-info', () => {
-  for (const action of ['tailor', 'prep'] as const) {
-    const cats = tailorIncludedCategories(ctx(action));
-    assert.deepEqual([...cats].sort(), ['job-description', 'profile-summary', 'skills', 'work-history']);
-    assert.equal(cats.includes('contact-info'), false);
-  }
+test('tailor sends the complete PII-redacted résumé manifest; prep stays profile-only', () => {
+  const tailor = tailorIncludedCategories(ctx('tailor'));
+  assert.deepEqual(
+    [...tailor].sort(),
+    ['education', 'job-description', 'profile-summary', 'resume', 'skills', 'work-history'],
+  );
+  assert.equal(tailor.includes('contact-info'), false);
+  assert.deepEqual(
+    [...tailorIncludedCategories(ctx('prep'))].sort(),
+    ['job-description', 'profile-summary', 'skills', 'work-history'],
+  );
 });
 
 test('cover letter adds contact-info (so the gate re-prompts every time)', () => {
@@ -138,7 +148,7 @@ const resume = JSON.parse(
 
 const semanticBulletFixtures = JSON.parse(
   readFileSync('fixtures/semantic-bullet-fragments.json', 'utf8'),
-) as Array<{ name: string; input: string[]; expected: string[] }>;
+) as Array<{ name: string; adversarialPurpose: string; input: string[]; expected: string[] }>;
 
 // --- the structured-output contract (messages) ------------------------------------------------
 
@@ -154,25 +164,42 @@ test('buildTailorResumeMessages carries the no-fabrication + JSON-only reword co
   assert.match(system.content, /REWORD existing material/);
   // Holistic rewording contract: whole-résumé judgement, and roles are NOT reordered.
   assert.match(system.content, /HOLISTICALLY/);
-  assert.match(system.content, /finished résumé as one document/i);
+  assert.match(system.content, /MANDATORY SILENT FINAL AUDIT/i);
   assert.match(system.content, /both resulting bullets/i);
   assert.match(system.content, /action and (?:its )?(?:result|impact)/i);
   assert.match(system.content, /rewrite the whole bullet more concisely/i);
+  assert.match(system.content, /ONE readable A4 page/);
+  assert.match(system.content, /88–102 characters/);
+  assert.match(system.content, /Built an S-learner XGBoost balance model/);
   assert.match(system.content, /Do NOT reorder roles/);
   assert.match(system.content, /ONLY a single JSON object/);
-  // Layout-bearing sections are explicitly withheld from the model (locked, deterministic render).
-  assert.match(system.content, /kept verbatim from the[\s\S]*source/i);
+  assert.match(system.content, /ONE AND ONLY ONE model call/i);
+  assert.match(system.content, /2 or 3 ranked/i);
+  assert.match(system.content, /ONE physical line/i);
   assert.equal(user.role, 'user');
   assert.match(user.content, /Data Scientist II/);
   assert.match(user.content, /Kubernetes, Rust/);
   // The model is shown indexed experience entries to reference by ref.
-  assert.match(user.content, /\[0\] Global Financial Services Co\. — Manager - Data Science/);
+  assert.match(user.content, /\[0\] Global Financial Services Co\. · Credit and Fraud Risk — Manager - Data Science/);
+  assert.match(user.content, /\[award:0\] 2024 Centurion Award/);
+  assert.match(user.content, /\[project:0:bullet:0\]/);
+  assert.match(user.content, /\[education:0\] IIT Kharagpur/);
+  assert.match(user.content, /\[skill:0:0\] Technology: XGBoost/);
 });
 
-test('cohereTailoredBullets repairs the real dangling action/result fragments', () => {
+test('the rejected mechanical merger is gone; dangling fragments are rejected, not rewritten', () => {
   for (const fixture of semanticBulletFixtures) {
-    assert.deepEqual(cohereTailoredBullets(fixture.input), fixture.expected, fixture.name);
+    assert.match(fixture.adversarialPurpose, /rejected rather than mechanically merged/i, fixture.name);
+    assert.equal(isDanglingImpactFragment(fixture.input[1]), true, fixture.name);
+    assert.deepEqual(cohereTailoredBullets(fixture.input), [fixture.input[0]], fixture.name);
   }
+});
+
+test('the two user-approved semantic rewrites are locked as regression fixtures', () => {
+  assert.deepEqual(semanticBulletFixtures.flatMap((fixture) => fixture.expected), [
+    'Built an S-learner XGBoost balance model that improved targeting precision and drove $15M in annual incremental revenue.',
+    'Built a GPT-powered feature discovery solution that generated 10+ novel features for the high-spend decliner segment.',
+  ]);
 });
 
 test('cohereTailoredBullets leaves independently meaningful accomplishments separate', () => {
@@ -191,6 +218,148 @@ test('the structured tailor prompt never leaks contact-info (manifest parity wit
     resume,
   });
   assert.doesNotMatch(user.content, /redacted@example\.com|000-000-0000|linkedin\.com/);
+  assert.doesNotMatch(user.content, /Karan Virender Mahajan/);
+  assert.match(user.content, /LOCKED BY APP[\s\S]*REDACTED/);
+});
+
+const completeAudit: TailoredEditorialAudit = {
+  completeResumeReviewed: true,
+  narrativeAndSectionBalanceChecked: true,
+  everyClaimIndependent: true,
+  actionImpactKeptTogether: true,
+  sourceCoverageChecked: true,
+  exactMetricsChecked: true,
+  truthfulnessChecked: true,
+  candidateLineFitChecked: true,
+  omissionsExplicit: true,
+};
+
+function completeEditorialPlan(): TailoredEditorialPlan {
+  return {
+    summaryCandidates: [
+      { rank: 1, text: resume.summary },
+      { rank: 2, text: resume.summary },
+    ],
+    experience: resume.experience.map((experience, roleIndex) => ({
+      ref: roleIndex,
+      scope: experience.scope,
+      claims: experience.bullets.map((bullet, bulletIndex) => {
+        const approved = roleIndex === 0 && bulletIndex < semanticBulletFixtures.length
+          ? semanticBulletFixtures[bulletIndex].expected[0]
+          : bullet;
+        return {
+          sourceRefs: [`experience:${roleIndex}:bullet:${bulletIndex}`],
+          candidates: [
+            { rank: 1 as const, text: approved },
+            { rank: 2 as const, text: bullet },
+          ],
+        };
+      }),
+    })),
+    omissions: [],
+    audit: completeAudit,
+  };
+}
+
+test('one-call editorial plan parser requires provenance, contiguous ranks, omissions, and all audit flags', () => {
+  const parsed = parseTailoredEditorialPlan(JSON.stringify(completeEditorialPlan()));
+  assert.ok(parsed);
+  assert.equal(parsed!.experience[0].claims[0].sourceRefs[0], 'experience:0:bullet:0');
+  assert.equal(parsed!.experience[0].claims[0].candidates.length, 2);
+
+  const incompleteAudit = completeEditorialPlan() as unknown as Record<string, unknown>;
+  incompleteAudit.audit = { ...completeAudit, exactMetricsChecked: false };
+  assert.equal(parseTailoredEditorialPlan(JSON.stringify(incompleteAudit)), null);
+
+  const oneCandidate = completeEditorialPlan();
+  oneCandidate.experience[0].claims[0].candidates.splice(1);
+  assert.equal(parseTailoredEditorialPlan(JSON.stringify(oneCandidate)), null);
+
+  const skippedRank = completeEditorialPlan();
+  skippedRank.experience[0].claims[0].candidates[1].rank = 3;
+  assert.equal(parseTailoredEditorialPlan(JSON.stringify(skippedRank)), null);
+
+  const malformedRef = completeEditorialPlan() as unknown as { experience: Array<{ claims: Array<{ sourceRefs: string[] }> }> };
+  malformedRef.experience[0].claims[0].sourceRefs = ['not-a-resume-ref'];
+  assert.equal(parseTailoredEditorialPlan(JSON.stringify(malformedRef)), null);
+});
+
+test('editorial validation accepts the complete grounded plan and both approved rewrites', () => {
+  const plan = completeEditorialPlan();
+  const validation = validateTailoredEditorialPlan(resume, plan);
+  assert.deepEqual(validation, { ok: true, errors: [] });
+  assert.equal(plan.experience[0].claims[0].candidates[0].text, semanticBulletFixtures[0].expected[0]);
+  assert.equal(plan.experience[0].claims[1].candidates[0].text, semanticBulletFixtures[1].expected[0]);
+});
+
+test('editorial validation rejects audit failures, unknown/duplicate refs, lost metrics, dangling candidates, and unaccounted source bullets', () => {
+  const failedAudit = completeEditorialPlan();
+  failedAudit.audit = { ...failedAudit.audit, exactMetricsChecked: false } as unknown as TailoredEditorialAudit;
+  assert.match(validateTailoredEditorialPlan(resume, failedAudit).errors.join('\n'), /required audit flag/);
+
+  const unknownRef = completeEditorialPlan();
+  unknownRef.experience[0].claims[0].sourceRefs = ['experience:999:bullet:0'];
+  assert.match(validateTailoredEditorialPlan(resume, unknownRef).errors.join('\n'), /Unknown claim ref/);
+
+  const duplicateRef = completeEditorialPlan();
+  duplicateRef.experience[0].claims[0].sourceRefs.push('experience:0:bullet:0');
+  assert.match(validateTailoredEditorialPlan(resume, duplicateRef).errors.join('\n'), /Duplicate claim ref/);
+
+  const lostMetric = completeEditorialPlan();
+  lostMetric.experience[0].claims[0].candidates[0].text = 'Built an S-learner XGBoost balance model for improved targeting precision.';
+  assert.equal(validateTailoredEditorialPlan(resume, lostMetric).ok, false);
+
+  const dangling = completeEditorialPlan();
+  dangling.experience[0].claims[1].candidates[0].text = 'Generating 10+ novel features for the high-spend decliner segment.';
+  assert.equal(validateTailoredEditorialPlan(resume, dangling).ok, false);
+
+  const uncovered = completeEditorialPlan();
+  uncovered.experience[0].claims.splice(0, 1);
+  assert.match(validateTailoredEditorialPlan(resume, uncovered).errors.join('\n'), /Unaccounted source ref/);
+});
+
+test('finalizer chooses the best ranked exact-width fit and returns canonical provenance + omissions', () => {
+  const plan = completeEditorialPlan();
+  // Force the rank-1 wording for the first claim not to fit; rank 2 must be selected without a call.
+  const firstClaim = plan.experience[0].claims[0];
+  const rank1 = firstClaim.candidates[0].text;
+  const rank2 = firstClaim.candidates[1].text;
+  const finalized = finalizeTailoredEditorialPlan(
+    resume,
+    plan,
+    (text) => ({ fits: text !== rank1, fillRatio: text === rank2 ? 0.96 : 0.82 }),
+  );
+  assert.ok(finalized);
+  assert.equal(finalized!.resume.experience[0].bullets[0], rank2);
+  assert.equal(finalized!.selectedClaims[0].candidate.rank, 2);
+  assert.deepEqual(finalized!.selectedClaims[0].sourceRefs, ['experience:0:bullet:0']);
+  assert.deepEqual(finalized!.omissions, []);
+});
+
+test('finalizer fails closed when no candidate fits and applies explicit reversible omissions', () => {
+  const plan = completeEditorialPlan();
+  assert.equal(
+    finalizeTailoredEditorialPlan(resume, plan, () => ({ fits: false, fillRatio: 1.1 })),
+    null,
+  );
+
+  const omittedRef = 'experience:0:bullet:3' as const;
+  plan.experience[0].claims = plan.experience[0].claims.filter(
+    (claim) => claim.sourceRefs[0] !== omittedRef,
+  );
+  plan.omissions = [
+    { sourceRef: omittedRef, reason: 'Less relevant to the target role', jdBased: true },
+    { sourceRef: 'award:4', reason: 'Lower-priority award for this JD', jdBased: true },
+  ];
+  const finalized = finalizeTailoredEditorialPlan(
+    resume,
+    plan,
+    () => ({ fits: true, fillRatio: 0.9 }),
+  );
+  assert.ok(finalized);
+  assert.equal(finalized!.resume.experience[0].bullets.length, resume.experience[0].bullets.length - 1);
+  assert.equal(finalized!.resume.awards.length, resume.awards.length - 1);
+  assert.deepEqual(finalized!.omissions, plan.omissions);
 });
 
 // --- the tolerant parser ----------------------------------------------------------------------
@@ -553,14 +722,11 @@ test('isCloseFit: a role the candidate fully evidences is close; a devops pivot 
   assert.equal(isCloseFit(computeGap({ jdText: 'We value curiosity and grit.', evidence: resumeSkills })), false);
 });
 
-test('G2.1 close-fit tightens the summary and stays one page; a pivot keeps the bridge summary', () => {
+test('G2.1 close-fit tightens the summary; a pivot keeps the bridge summary', () => {
   const close = pruneOptionalForRelevance(resume, closeFitJd, { closeFit: true });
   // Summary shortened on a close fit (bullets deserve the page), still grounded in the source text.
   assert.ok(close.summary.length < resume.summary.length, 'close-fit summary should be tightened');
   assert.ok(resume.summary.startsWith(close.summary), 'tightened summary must be a prefix of the source');
-  // The one-page invariant holds on the pruned result.
-  assert.equal(createStructuredResumePdf(close).getNumberOfPages(), 1);
-
   // A stretch/pivot keeps the full bridge-explaining summary.
   const pivot = pruneOptionalForRelevance(resume, pivotJd, { closeFit: false });
   assert.equal(pivot.summary, resume.summary);

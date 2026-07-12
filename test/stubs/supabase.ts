@@ -63,15 +63,19 @@ globalThis.__SUPABASE_ROWS__ = {
 function makeBuilder(table) {
   const rows = globalThis.__SUPABASE_ROWS__;
   let inserted = null;
+  let updated = null;
+  const filters = {};
   const builder = {
     select() {
       return builder;
     },
-    eq() {
+    eq(column, value) {
+      filters[column] = value;
       return builder;
     },
     update(payload) {
       updates.push(payload);
+      updated = payload;
       return builder;
     },
     delete() {
@@ -89,6 +93,14 @@ function makeBuilder(table) {
       return Promise.resolve({ data: rows[table] ?? null, error: null });
     },
     single() {
+      if (updated && table === 'artifacts') {
+        const row = rows.artifacts.find((item) =>
+          Object.entries(filters).every(([column, value]) => item[column] === value),
+        );
+        if (!row) return Promise.resolve({ data: null, error: { message: 'Artifact not found' } });
+        Object.assign(row, updated);
+        return Promise.resolve({ data: row, error: null });
+      }
       const data = inserted
         ? { id: `artifact-${inserts.length}`, created_at: '2026-06-28T00:00:00Z', ...inserted }
         : rows[table] ?? null;

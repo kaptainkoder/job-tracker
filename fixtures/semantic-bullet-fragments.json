@@ -1,22 +1,24 @@
 [
   {
     "name": "balance model action and revenue impact",
+    "adversarialPurpose": "A dangling impact fragment must be rejected rather than mechanically merged; the expected rewrite keeps the source action and $15M impact as one independently auditable, single-line claim.",
     "input": [
       "Led end-to-end build and launch of an s-learner XGBoost incremental Balance Model",
       "Driving $15M in annual incremental revenue through improved targeting precision."
     ],
     "expected": [
-      "Led end-to-end build and launch of an s-learner XGBoost incremental Balance Model, driving $15M in annual incremental revenue through improved targeting precision."
+      "Built an S-learner XGBoost balance model that improved targeting precision and drove $15M in annual incremental revenue."
     ]
   },
   {
     "name": "feature discovery action and model impact",
+    "adversarialPurpose": "A dangling participial result must be rejected rather than mechanically merged; the expected rewrite keeps the source action and 10+ outcome as one independently auditable, single-line claim.",
     "input": [
       "Developed a custom GPT-based Feature Discovery solution",
       "Generating 10+ novel features to boost model performance for the high-spend decliners segment."
     ],
     "expected": [
-      "Developed a custom GPT-based Feature Discovery solution, generating 10+ novel features to boost model performance for the high-spend decliners segment."
+      "Built a GPT-powered feature discovery solution that generated 10+ novel features for the high-spend decliner segment."
     ]
   }
 ]

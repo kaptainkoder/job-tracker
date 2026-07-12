@@ -74,6 +74,7 @@ export interface TailorContext {
 // they add `contact-info` — which makes every cover call re-trigger the gate (full-PII), as locked.
 export function tailorIncludedCategories(ctx: TailorContext): PrivacyCategory[] {
   const categories: PrivacyCategory[] = ['job-description', 'profile-summary', 'work-history', 'skills'];
+  if (ctx.action === 'tailor') categories.push('education', 'resume');
   if (ctx.action === 'cover') categories.push('contact-info');
   return categories;
 }
@@ -190,6 +191,82 @@ export interface TailoredResumePatch {
   experience: TailoredExperience[];
 }
 
+/** A renderer-independent source pointer used by the model's auditable editorial plan. */
+export type ResumeSourceRef =
+  | 'summary'
+  | `award:${number}`
+  | `experience:${number}:scope`
+  | `experience:${number}:bullet:${number}`
+  | `project:${number}`
+  | `project:${number}:scope`
+  | `project:${number}:bullet:${number}`
+  | `education:${number}`
+  | `skill:${number}:${number}`
+  | `addition:${number}`;
+
+export interface TailoredCandidate {
+  /** 1 is the model's strongest editorial choice. Ranks must be unique within a claim. */
+  rank: 1 | 2 | 3;
+  text: string;
+}
+
+export interface TailoredClaimPlan {
+  /** One ref for a rewrite/split; two or more when overlapping source bullets are merged. */
+  sourceRefs: ResumeSourceRef[];
+  /** Two or three complete, truthful alternatives. The app chooses by exact rendered width. */
+  candidates: TailoredCandidate[];
+}
+
+export interface TailoredExperiencePlan {
+  ref: number;
+  scope?: string;
+  claims: TailoredClaimPlan[];
+}
+
+export interface TailoredOmission {
+  sourceRef: ResumeSourceRef;
+  reason: string;
+  /** Lets TailorReview distinguish JD tailoring from an unrelated edit. */
+  jdBased: boolean;
+}
+
+export interface TailoredEditorialAudit {
+  completeResumeReviewed: true;
+  narrativeAndSectionBalanceChecked: true;
+  everyClaimIndependent: true;
+  actionImpactKeptTogether: true;
+  sourceCoverageChecked: true;
+  exactMetricsChecked: true;
+  truthfulnessChecked: true;
+  candidateLineFitChecked: true;
+  omissionsExplicit: true;
+}
+
+/**
+ * The one-call model result. It is deliberately an editorial plan rather than final renderer text:
+ * every logical claim has provenance and 2–3 ranked alternatives, allowing the app to pick the
+ * strongest alternative that fits the measured line width without asking the model again.
+ */
+export interface TailoredEditorialPlan {
+  summaryCandidates?: TailoredCandidate[];
+  experience: TailoredExperiencePlan[];
+  omissions: TailoredOmission[];
+  audit: TailoredEditorialAudit;
+}
+
+export interface TailorBulletLayoutContract {
+  /** Exact usable width reported by the PDF renderer for an experience bullet. */
+  availableWidthMm: number;
+  fontFamily: string;
+  fontSizePt: number;
+  preferredMinFillRatio?: number;
+  pageWidthMm?: number;
+  pageHeightMm?: number;
+  minPageUtilization?: number;
+  sourcePageCount?: number;
+  sourceUtilization?: number;
+}
+
 export interface TailorResumeContext {
   company: string;
   role: string;
@@ -210,6 +287,8 @@ export interface TailorResumeContext {
    * brief but bridge-explaining. Derived deterministically from computeGap via `isCloseFit`.
    */
   closeFit?: boolean;
+  /** Shared renderer measurement. Required by the new one-call editorial contract. */
+  bulletLayout?: TailorBulletLayoutContract;
 }
 
 // Hard contract for the structured `tailor` action: reword/reorder + ground evidence-backed
@@ -217,18 +296,19 @@ export interface TailorResumeContext {
 const STRUCTURED_TAILOR_SYSTEM = [
   NO_FABRICATION_SYSTEM,
   '',
-  'You are given the candidate’s résumé as structured JSON — the ONLY truthful source, plus an',
+  'You are given the candidate’s COMPLETE professional résumé — the ONLY truthful source, plus an',
   'optional list of CONFIRMED TRUTHFUL ADDITIONS: skills the candidate has confirmed and backed with',
   'their own usage evidence. Your job is to REWORD existing material toward the target job, in the',
   'job’s vocabulary, and to truthfully fold in the confirmed additions, WITHOUT adding any fact,',
   'skill, employer, title, date, metric, or credential that is not already present in the source',
   'résumé OR in a confirmed addition’s evidence.',
   '',
-  'Work HOLISTICALLY, not bullet-by-bullet — this is what intelligent rewording means. First read the',
-  'WHOLE résumé and the WHOLE job description and understand the candidate’s overall story and what',
+  'This is ONE AND ONLY ONE model call. There is no repair call. Work HOLISTICALLY, not bullet-by-',
+  'bullet. First read the WHOLE résumé and the WHOLE job description: summary, awards, every role,',
+  'projects, education, and skills. Understand the candidate’s overall story and what',
   'THIS role values most. Then reshape the content the way a sharp editor would: emphasise the',
-  'experience that matters most here, reword in the job’s language, MERGE two overlapping bullets into',
-  'one stronger line, or SPLIT one overloaded bullet only when it contains two genuinely independent',
+  'experience that matters most here, reword in the job’s language, MERGE overlapping source bullets',
+  'into one stronger line, or SPLIT an overloaded bullet only when it contains two genuinely independent',
   'accomplishments. Both resulting bullets must make complete sense on their own: each needs a clear',
   'action and its result, impact, purpose, or business context. Never separate an action from the',
   'impact that explains why it mattered. If joining them verbatim would sound clumsy or run long,',
@@ -238,7 +318,8 @@ const STRUCTURED_TAILOR_SYSTEM = [
   'same phrasing across roles. You may rephrase the summary, reword and reorder bullets WITHIN a role,',
   'tighten a scope line, and drop a bullet that is irrelevant to the job. Do NOT reorder roles — the',
   'résumé always stays in the source (reverse-chronological) order. You may NOT invent a role, award,',
-  'school, skill, or number, and never drop a role entirely.',
+  'school, skill, or number, and never drop a role entirely. Every source experience bullet must be',
+  'represented by a claim sourceRef or by an explicit omission with a concrete reason.',
   '',
   'Confirmed truthful additions (when present):',
   '- A confirmed skill may be named in a reworded bullet ONLY when its evidence describes using it.',
@@ -248,52 +329,111 @@ const STRUCTURED_TAILOR_SYSTEM = [
   '- The Skills section itself is added deterministically by the app; do not restate skill lists.',
   '',
   'Hard constraints for the rewording:',
-  '- Keep each bullet concise and information-dense. Prefer a near-full résumé line (roughly 14–22',
-  '  words), but meaning wins over visual length. The renderer safely wraps a long semantic bullet;',
-  '  NEVER create a dangling result fragment merely to force every bullet onto one visual line.',
+  '- Each semantic bullet MUST fit on ONE physical line under the measured layout contract supplied',
+  '  by the app. Never rely on wrapping, balanced wrapping, clause splitting, or font shrinking.',
+  '- For every logical claim return 2 or 3 ranked, independently coherent candidate rewrites. Rank 1',
+  '  is the strongest editorial choice. Candidate 1 should usually be 88–102 characters; candidate',
+  '  2 should usually be 103–117 characters. Count spaces and punctuation. Do not exceed 117',
+  '  characters unless an exact metric makes that unavoidable; the app still measures actual glyphs.',
+  '- Prefer candidates that nearly fill the available width while remaining concise and natural.',
+  '- NEVER return a dangling result fragment such as "Driving ..." or "Generating ..." as a bullet.',
+  '- The completed résumé must fit ONE readable A4 page at the fixed typography. Preserve every role;',
+  '  use explicit, reasoned omissions for lower-value source claims or optional sections when needed,',
+  '  but do not over-prune or leave conspicuous empty space. No source item may disappear silently.',
+  '- Summary candidates must preserve every exact metric from the source summary. If a truthful',
+  '  metric cannot fit naturally, explicitly omit the summary instead of weakening the number.',
+  '',
+  'Quality-bar examples from this candidate’s approved source facts (apply the same general rule to',
+  'every claim; these are examples, not permission to invent or hardcode):',
+  '- Built an S-learner XGBoost balance model that improved targeting precision and drove $15M in annual incremental revenue.',
+  '- Built a GPT-powered feature discovery solution that generated 10+ novel features for the high-spend decliner segment.',
   '- Lead with a concrete action and connect it to its metric, result, purpose, or business context.',
   '- Reword in the job’s vocabulary, but ONLY by inference grounded in the source bullet or evidence.',
   '  Never name a tool, platform, or domain the candidate has not used (e.g. AWS, Snowflake, Azure,',
   '  Databricks, Hadoop, Kafka, AML) — use only the candidate’s own stack.',
-  '- Keep every number EXACTLY as it appears in the source or evidence ($15M stays $15M, 41.25% stays',
-  '  41.25%). Never introduce a new number or metric.',
+  '- Preserve every metric in the represented source claims EXACTLY ($15M stays $15M, 41.25% stays',
+  '  41.25%, and 10+ stays 10+). Never introduce, weaken, round, or silently discard a metric.',
   '- Do not add Markdown emphasis; the renderer bolds key metrics and skills automatically.',
   '',
-  'Before returning JSON, silently review the finished résumé as one document — not as isolated',
-  'sentences. Check the summary-to-experience story, section emphasis for this job, bullet sequence',
-  'within every role, duplicated ideas, choppy fragments, and action-to-impact completeness. Rewrite',
-  'anything awkward. A reader must be able to understand every bullet on its own and the résumé as a',
-  'clean, coherent whole. Do not mention this editorial check in the output.',
+  'Before returning JSON, perform a MANDATORY SILENT FINAL AUDIT of the complete proposed résumé.',
+  'Check the summary, section balance, role-level sequence, repetition, relevance, projects, awards,',
+  'skills, overall narrative, exact metrics, source coverage, truthfulness, omissions, and every',
+  'candidate’s independent action-plus-impact coherence and likely one-line fit. Rewrite anything',
+  'awkward before setting every audit flag true. Do not narrate the audit.',
   '',
   'Return ONLY a single JSON object (no prose, no Markdown, no code fence) of this exact shape:',
   '{',
-  '  "summary": "<reworded summary, optional>",',
+  '  "summaryCandidates": [{"rank":1,"text":"..."},{"rank":2,"text":"..."}],',
   '  "experience": [',
-  '    { "ref": <0-based index of a source experience>, "scope": "<reworded scope, optional>",',
-  '      "bullets": ["<reworded bullet>", "..."] }',
-  '  ]',
+  '    { "ref": <role index>, "scope": "<optional grounded scope>", "claims": [',
+  '      { "sourceRefs": ["experience:<role>:bullet:<index>"],',
+  '        "candidates": [{"rank":1,"text":"..."},{"rank":2,"text":"..."}] }',
+  '    ] }',
+  '  ],',
+  '  "omissions": [{"sourceRef":"<exact ref>","reason":"<specific>","jdBased":true}],',
+  '  "audit": {"completeResumeReviewed":true,"narrativeAndSectionBalanceChecked":true,',
+  '    "everyClaimIndependent":true,"actionImpactKeptTogether":true,"sourceCoverageChecked":true,',
+  '    "exactMetricsChecked":true,"truthfulnessChecked":true,"candidateLineFitChecked":true,',
+  '    "omissionsExplicit":true}',
   '}',
-  'Do NOT include contact, awards, education, projects, or skills — those are kept verbatim from the',
-  'source. "ref" must be the index of an existing source experience entry.',
+  'Contact fields are locked and redacted before transmission. Awards, projects, education, and',
+  'skills are supplied for holistic review; keep them verbatim unless you list a JD-based omission.',
+  'Never include contact fields in output. Refs must exactly match the supplied source refs.',
 ].join('\n');
 
 // Serialize only the rewordable surfaces (summary + indexed experience) so the model knows the refs
 // and never sees layout. Contact/awards/education/skills are intentionally withheld — they are
 // locked, so there is nothing for the model to do with them.
-function renderResumeForTailoring(resume: StructuredResume): string {
+export function renderResumeForTailoring(resume: StructuredResume): string {
   const lines: string[] = [];
-  lines.push('Summary:');
+  lines.push('Contact: [LOCKED BY APP; name, email, phone, links, and location REDACTED — do not infer or return]');
+  lines.push(`Professional headline: ${resume.contact.title?.trim() || '(none)'}`);
+  lines.push('');
+  lines.push('[summary] Summary:');
   lines.push(resume.summary?.trim() || '(none)');
   lines.push('');
-  lines.push('Experience entries (reword by their index; keep every entry):');
+  lines.push('Awards:');
+  resume.awards.forEach((award, i) => {
+    lines.push(`[award:${i}] ${award.title}${award.detail ? ` — ${award.detail}` : ''}`);
+  });
+  lines.push('');
+  lines.push('Experience entries:');
   resume.experience.forEach((exp, i) => {
     const dates = [exp.start, exp.end].filter((d) => d && d.trim()).join('–');
-    const header = [exp.org, exp.title].filter((v) => v && v.trim()).join(' — ');
-    lines.push(`[${i}] ${header}${dates ? ` (${dates})` : ''}`);
-    if (exp.scope && exp.scope.trim()) lines.push(`    scope: ${exp.scope.trim()}`);
-    for (const bullet of exp.bullets) {
-      if (bullet && bullet.trim()) lines.push(`    - ${bullet.trim()}`);
-    }
+    const org = [exp.org, exp.orgDetail].filter((v) => v && v.trim()).join(' · ');
+    const header = [org, exp.title].filter((v) => v && v.trim()).join(' — ');
+    lines.push(`[${i}] ${header}${dates ? ` (${dates})` : ''}${exp.location ? ` — ${exp.location}` : ''}`);
+    if (exp.scope && exp.scope.trim()) lines.push(`    [experience:${i}:scope] ${exp.scope.trim()}`);
+    exp.bullets.forEach((bullet, bulletIndex) => {
+      if (bullet && bullet.trim()) {
+        lines.push(`    [experience:${i}:bullet:${bulletIndex}] ${bullet.trim()}`);
+      }
+    });
+  });
+  lines.push('');
+  lines.push('Projects:');
+  resume.projects.forEach((project, i) => {
+    lines.push(`[project:${i}] ${project.name}${project.location ? ` — ${project.location}` : ''}`);
+    if (project.scope?.trim()) lines.push(`    [project:${i}:scope] ${project.scope.trim()}`);
+    project.bullets.forEach((bullet, bulletIndex) => {
+      if (bullet.trim()) lines.push(`    [project:${i}:bullet:${bulletIndex}] ${bullet.trim()}`);
+    });
+  });
+  lines.push('');
+  lines.push('Education:');
+  resume.education.forEach((education, i) => {
+    lines.push(
+      `[education:${i}] ${education.school} — ${education.degree} (${education.start}–${education.end})` +
+        (education.location ? ` — ${education.location}` : '') +
+        (education.detail ? `; ${education.detail}` : ''),
+    );
+  });
+  lines.push('');
+  lines.push('Skills:');
+  resume.skills.forEach((group, groupIndex) => {
+    group.items.forEach((skill, skillIndex) => {
+      lines.push(`[skill:${groupIndex}:${skillIndex}] ${group.label ? `${group.label}: ` : ''}${skill}`);
+    });
   });
   return lines.join('\n');
 }
@@ -304,7 +444,7 @@ function renderResumeForTailoring(resume: StructuredResume): string {
 export function buildTailorResumeMessages(ctx: TailorResumeContext): ChatMessage[] {
   const additions =
     (ctx.truthfulAdditions ?? [])
-      .map((a) => `- ${skillLabel(a.skill)}: ${a.evidence}`)
+      .map((a, i) => `[addition:${i}] ${skillLabel(a.skill)}: ${a.evidence}`)
       .join('\n') || '(none)';
 
   const userContent = [
@@ -321,13 +461,25 @@ export function buildTailorResumeMessages(ctx: TailorResumeContext): ChatMessage
     'the rules above; the evidence text is a truthful source for any bullet you derive from it):',
     additions,
     '',
+    'Measured one-line layout contract:',
+    ctx.bulletLayout
+      ? `Experience bullet width: ${ctx.bulletLayout.availableWidthMm}mm; font: ${ctx.bulletLayout.fontFamily} ` +
+        `${ctx.bulletLayout.fontSizePt}pt; preferred fill: ${Math.round((ctx.bulletLayout.preferredMinFillRatio ?? 0.75) * 100)}–100%; ` +
+        `page: ${ctx.bulletLayout.pageWidthMm ?? 210}×${ctx.bulletLayout.pageHeightMm ?? 297}mm; ` +
+        `minimum page utilization: ${Math.round((ctx.bulletLayout.minPageUtilization ?? 0.72) * 100)}%; ` +
+        `current source: ${ctx.bulletLayout.sourcePageCount ?? 'unknown'} page(s), ` +
+        `${ctx.bulletLayout.sourceUtilization === undefined ? 'unknown' : Math.round(ctx.bulletLayout.sourceUtilization * 100)}% of one-page height. ` +
+        `${(ctx.bulletLayout.sourcePageCount ?? 1) > 1 ? 'The source DOES NOT FIT: explicitly omit lower-JD-value optional content/redundant claims until the proposed result is one page.' : ''}`
+      : 'Exact width will be enforced by the app; provide concise alternatives and never depend on wrapping.',
+    '',
     ctx.closeFit
       ? 'Summary guidance: the candidate already closely matches this role. Keep the summary to at most ' +
         'one crisp line, or omit it entirely, so the experience bullets get the page.'
       : 'Summary guidance: this is an adjacent/stretch move. Keep a brief 1–2 line summary that honestly ' +
         'bridges the candidate’s real background to this role (transferable strengths), inventing nothing.',
     '',
-    'Return the JSON patch described in the system message. Reword toward this job; invent nothing.',
+    'Return the audited editorial-plan JSON described in the system message. This is the only LLM',
+    'call: self-check everything before returning it. Reword toward this job; invent nothing.',
   ].join('\n');
 
   return [
@@ -340,32 +492,132 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === 'string');
 }
 
-// Parse the model's JSON patch tolerantly: strip an optional ```json fence, JSON.parse, and validate
-// the shape. Returns null on any malformed input so the caller can fall back to the un-tailored
-// source résumé rather than render garbage. Out-of-shape fields are dropped, not coerced.
-export function parseTailoredResumePatch(raw: string): TailoredResumePatch | null {
+const SOURCE_REF = /^(?:summary|award:\d+|experience:\d+:(?:scope|bullet:\d+)|project:\d+(?::(?:scope|bullet:\d+))?|education:\d+|skill:\d+:\d+|addition:\d+)$/;
+const AUDIT_KEYS: readonly (keyof TailoredEditorialAudit)[] = [
+  'completeResumeReviewed',
+  'narrativeAndSectionBalanceChecked',
+  'everyClaimIndependent',
+  'actionImpactKeptTogether',
+  'sourceCoverageChecked',
+  'exactMetricsChecked',
+  'truthfulnessChecked',
+  'candidateLineFitChecked',
+  'omissionsExplicit',
+];
+
+function extractJsonObject(raw: string): Record<string, unknown> | null {
   if (typeof raw !== 'string') return null;
   let text = raw.trim();
   if (!text) return null;
-  // Strip a Markdown code fence if the model wrapped the JSON despite the instruction.
   const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(text);
   if (fence) text = fence[1].trim();
-  // If there is leading/trailing prose, isolate the outermost JSON object.
   if (!text.startsWith('{')) {
     const start = text.indexOf('{');
     const end = text.lastIndexOf('}');
     if (start < 0 || end <= start) return null;
     text = text.slice(start, end + 1);
   }
-
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
+    const parsed: unknown = JSON.parse(text);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
   } catch {
     return null;
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-  const obj = parsed as Record<string, unknown>;
+}
+
+function parseCandidates(value: unknown): TailoredCandidate[] | null {
+  if (!Array.isArray(value) || value.length < 2 || value.length > 3) return null;
+  const candidates: TailoredCandidate[] = [];
+  const ranks = new Set<number>();
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const candidate = raw as Record<string, unknown>;
+    if (
+      (candidate.rank !== 1 && candidate.rank !== 2 && candidate.rank !== 3) ||
+      ranks.has(candidate.rank) ||
+      typeof candidate.text !== 'string' ||
+      !candidate.text.trim()
+    ) return null;
+    ranks.add(candidate.rank);
+    candidates.push({ rank: candidate.rank, text: candidate.text.trim() });
+  }
+  if (!ranks.has(1) || [...ranks].some((rank) => rank > candidates.length)) return null;
+  return candidates.sort((a, b) => a.rank - b.rank);
+}
+
+/** Strict structural parser for the one-call editorial plan. Semantic/source checks are separate. */
+export function parseTailoredEditorialPlan(raw: string): TailoredEditorialPlan | null {
+  const obj = extractJsonObject(raw);
+  if (!obj || !Array.isArray(obj.experience) || !Array.isArray(obj.omissions)) return null;
+  if (!obj.audit || typeof obj.audit !== 'object' || Array.isArray(obj.audit)) return null;
+  const rawAudit = obj.audit as Record<string, unknown>;
+  if (AUDIT_KEYS.some((key) => rawAudit[key] !== true)) return null;
+
+  let summaryCandidates: TailoredCandidate[] | undefined;
+  if (obj.summaryCandidates !== undefined) {
+    const parsed = parseCandidates(obj.summaryCandidates);
+    if (!parsed) return null;
+    summaryCandidates = parsed;
+  }
+
+  const experience: TailoredExperiencePlan[] = [];
+  for (const rawRole of obj.experience) {
+    if (!rawRole || typeof rawRole !== 'object' || Array.isArray(rawRole)) return null;
+    const role = rawRole as Record<string, unknown>;
+    if (typeof role.ref !== 'number' || !Number.isInteger(role.ref) || role.ref < 0) return null;
+    if (!Array.isArray(role.claims)) return null;
+    const claims: TailoredClaimPlan[] = [];
+    for (const rawClaim of role.claims) {
+      if (!rawClaim || typeof rawClaim !== 'object' || Array.isArray(rawClaim)) return null;
+      const claim = rawClaim as Record<string, unknown>;
+      if (
+        !isStringArray(claim.sourceRefs) ||
+        claim.sourceRefs.length === 0 ||
+        claim.sourceRefs.some((ref) => !SOURCE_REF.test(ref))
+      ) return null;
+      const candidates = parseCandidates(claim.candidates);
+      if (!candidates) return null;
+      claims.push({ sourceRefs: claim.sourceRefs as ResumeSourceRef[], candidates });
+    }
+    const parsedRole: TailoredExperiencePlan = { ref: role.ref, claims };
+    if (typeof role.scope === 'string' && role.scope.trim()) parsedRole.scope = role.scope.trim();
+    experience.push(parsedRole);
+  }
+
+  const omissions: TailoredOmission[] = [];
+  for (const rawOmission of obj.omissions) {
+    if (!rawOmission || typeof rawOmission !== 'object' || Array.isArray(rawOmission)) return null;
+    const omission = rawOmission as Record<string, unknown>;
+    if (
+      typeof omission.sourceRef !== 'string' ||
+      !SOURCE_REF.test(omission.sourceRef) ||
+      typeof omission.reason !== 'string' ||
+      !omission.reason.trim() ||
+      typeof omission.jdBased !== 'boolean'
+    ) return null;
+    omissions.push({
+      sourceRef: omission.sourceRef as ResumeSourceRef,
+      reason: omission.reason.trim(),
+      jdBased: omission.jdBased,
+    });
+  }
+
+  return {
+    ...(summaryCandidates ? { summaryCandidates } : {}),
+    experience,
+    omissions,
+    audit: rawAudit as unknown as TailoredEditorialAudit,
+  };
+}
+
+// Parse the model's JSON patch tolerantly: strip an optional ```json fence, JSON.parse, and validate
+// the shape. Returns null on any malformed input so the caller can fall back to the un-tailored
+// source résumé rather than render garbage. Out-of-shape fields are dropped, not coerced.
+export function parseTailoredResumePatch(raw: string): TailoredResumePatch | null {
+  const obj = extractJsonObject(raw);
+  if (!obj) return null;
 
   if (!Array.isArray(obj.experience)) return null;
   const experience: TailoredExperience[] = [];
@@ -457,6 +709,292 @@ export function groundReword(text: string, numbers: Set<string>, allowed: Set<st
   return text;
 }
 
+const EXACT_METRIC_TOKEN = /(?:[$£€])?\d+(?:\.\d+)?(?:%|\+|[KMBxX])?/g;
+const DANGLING_IMPACT_START = /^(?:achieving|boosting|contributing|creating|cutting|delivering|driving|enabling|generating|improving|increasing|leading\s+to|reducing|resulting\s+in|saving|yielding)\b/i;
+
+export function isDanglingImpactFragment(text: string): boolean {
+  return DANGLING_IMPACT_START.test(text.trim());
+}
+
+function exactMetrics(text: string): string[] {
+  return (text.match(EXACT_METRIC_TOKEN) ?? []).sort();
+}
+
+function sameStrings(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function multisetContains(haystack: readonly string[], needles: readonly string[]): boolean {
+  const remaining = [...haystack];
+  for (const needle of needles) {
+    const index = remaining.indexOf(needle);
+    if (index < 0) return false;
+    remaining.splice(index, 1);
+  }
+  return true;
+}
+
+/** Resolve a stable model ref to its exact source text. Contact refs intentionally do not exist. */
+export function resolveResumeSourceRef(
+  source: StructuredResume,
+  ref: ResumeSourceRef,
+  additions: readonly string[] = [],
+): string | null {
+  if (ref === 'summary') return source.summary;
+  let match = /^award:(\d+)$/.exec(ref);
+  if (match) {
+    const award = source.awards[Number(match[1])];
+    return award ? [award.title, award.detail].filter(Boolean).join(' — ') : null;
+  }
+  match = /^experience:(\d+):(scope|bullet:(\d+))$/.exec(ref);
+  if (match) {
+    const experience = source.experience[Number(match[1])];
+    if (!experience) return null;
+    return match[2] === 'scope' ? experience.scope ?? null : experience.bullets[Number(match[3])] ?? null;
+  }
+  match = /^project:(\d+):(scope|bullet:(\d+))$/.exec(ref);
+  if (match) {
+    const project = source.projects[Number(match[1])];
+    if (!project) return null;
+    return match[2] === 'scope' ? project.scope ?? null : project.bullets[Number(match[3])] ?? null;
+  }
+  match = /^project:(\d+)$/.exec(ref);
+  if (match) {
+    const project = source.projects[Number(match[1])];
+    return project ? [project.name, project.location].filter(Boolean).join(' — ') : null;
+  }
+  match = /^education:(\d+)$/.exec(ref);
+  if (match) {
+    const education = source.education[Number(match[1])];
+    return education
+      ? [education.school, education.detail, education.degree, education.start, education.end].filter(Boolean).join(' — ')
+      : null;
+  }
+  match = /^skill:(\d+):(\d+)$/.exec(ref);
+  if (match) return source.skills[Number(match[1])]?.items[Number(match[2])] ?? null;
+  match = /^addition:(\d+)$/.exec(ref);
+  if (match) return additions[Number(match[1])] ?? null;
+  return null;
+}
+
+export interface TailoredPlanValidation {
+  ok: boolean;
+  errors: string[];
+}
+
+/**
+ * Defensive semantic gate. A model's checked audit is necessary but never trusted on its own:
+ * this verifies refs, complete source-bullet accounting, exact metrics, grounding, and fragments.
+ */
+export function validateTailoredEditorialPlan(
+  source: StructuredResume,
+  plan: TailoredEditorialPlan,
+  additions: readonly string[] = [],
+): TailoredPlanValidation {
+  const errors: string[] = [];
+  if (AUDIT_KEYS.some((key) => plan.audit[key] !== true)) {
+    errors.push('Editorial plan is missing a required audit flag');
+  }
+  const allowed = buildAllowedTerms(source, additions);
+  const numbers = buildResumeNumbers(source, additions);
+  const claimedRefs = new Set<ResumeSourceRef>();
+  const omittedRefs = new Set<ResumeSourceRef>();
+  const expectedMetricRefs = new Set<ResumeSourceRef>();
+  const selectedMetrics: string[] = [];
+  for (const candidate of plan.summaryCandidates ?? []) {
+    if (groundReword(candidate.text, numbers, allowed) === null) {
+      errors.push(`Summary candidate ${candidate.rank} is not grounded`);
+    }
+    if (!sameStrings(exactMetrics(source.summary), exactMetrics(candidate.text))) {
+      errors.push(`Summary candidate ${candidate.rank} does not preserve every exact summary metric`);
+    }
+  }
+
+  for (const omission of plan.omissions) {
+    if (resolveResumeSourceRef(source, omission.sourceRef, additions) === null) {
+      errors.push(`Unknown omission ref: ${omission.sourceRef}`);
+    }
+    if (omittedRefs.has(omission.sourceRef)) errors.push(`Duplicate omission ref: ${omission.sourceRef}`);
+    omittedRefs.add(omission.sourceRef);
+  }
+
+  const seenRoles = new Set<number>();
+  for (const role of plan.experience) {
+    if (!source.experience[role.ref]) errors.push(`Unknown experience ref: ${role.ref}`);
+    if (seenRoles.has(role.ref)) errors.push(`Duplicate experience ref: ${role.ref}`);
+    seenRoles.add(role.ref);
+    if (role.claims.length === 0) errors.push(`Experience ${role.ref} has no retained claim`);
+    if (role.scope) {
+      const sourceScope = source.experience[role.ref]?.scope ?? '';
+      if (groundReword(role.scope, numbers, allowed) === null) {
+        errors.push(`Experience ${role.ref} scope is not grounded`);
+      }
+      if (!sameStrings(exactMetrics(sourceScope), exactMetrics(role.scope))) {
+        errors.push(`Experience ${role.ref} scope does not preserve every exact source metric`);
+      }
+    }
+
+    for (const [claimIndex, claim] of role.claims.entries()) {
+      const sourceMetrics: string[] = [];
+      for (const ref of claim.sourceRefs) {
+        const text = resolveResumeSourceRef(source, ref, additions);
+        if (text === null) {
+          errors.push(`Unknown claim ref: ${ref}`);
+          continue;
+        }
+        const roleRef = /^experience:(\d+):bullet:\d+$/.exec(ref);
+        const additionRef = /^addition:\d+$/.test(ref);
+        if (!roleRef && !additionRef) {
+          errors.push(`Claim ref must be an experience bullet or confirmed addition: ${ref}`);
+        } else if (roleRef && Number(roleRef[1]) !== role.ref) {
+          errors.push(`Claim ref ${ref} belongs to a different experience`);
+        }
+        if (omittedRefs.has(ref)) errors.push(`Ref is both claimed and omitted: ${ref}`);
+        if (claimedRefs.has(ref)) errors.push(`Duplicate claim ref: ${ref}`);
+        claimedRefs.add(ref);
+        expectedMetricRefs.add(ref);
+        sourceMetrics.push(...exactMetrics(text));
+      }
+      sourceMetrics.sort();
+
+      const primaryMetrics = exactMetrics(claim.candidates[0].text);
+      selectedMetrics.push(...primaryMetrics);
+      if (!multisetContains(sourceMetrics, primaryMetrics)) {
+        errors.push(`Claim ${role.ref}.${claimIndex} moves or invents a metric outside its source refs`);
+      }
+      for (const candidate of claim.candidates) {
+        const label = `Candidate ${role.ref}.${claimIndex}.${candidate.rank}`;
+        if (isDanglingImpactFragment(candidate.text)) errors.push(`${label} is a dangling impact fragment`);
+        if (groundReword(candidate.text, numbers, allowed) === null) errors.push(`${label} is not grounded`);
+        if (!sameStrings(exactMetrics(candidate.text), primaryMetrics)) {
+          errors.push(`${label} does not preserve the claim's exact metric set`);
+        }
+      }
+    }
+  }
+
+  for (let roleIndex = 0; roleIndex < source.experience.length; roleIndex += 1) {
+    if (!seenRoles.has(roleIndex)) errors.push(`Missing experience ref: ${roleIndex}`);
+  }
+
+  const requiredRefs: ResumeSourceRef[] = source.experience.flatMap((experience, roleIndex) =>
+    experience.bullets.map((_, bulletIndex) => `experience:${roleIndex}:bullet:${bulletIndex}` as ResumeSourceRef),
+  );
+  for (const ref of requiredRefs) {
+    if (!claimedRefs.has(ref) && !omittedRefs.has(ref)) errors.push(`Unaccounted source ref: ${ref}`);
+  }
+
+  const expectedMetrics = [...expectedMetricRefs]
+    .flatMap((ref) => exactMetrics(resolveResumeSourceRef(source, ref, additions) ?? ''))
+    .sort();
+  selectedMetrics.sort();
+  if (!sameStrings(expectedMetrics, selectedMetrics)) {
+    errors.push('Selected claims do not preserve all exact metrics from represented source refs');
+  }
+
+  return { ok: errors.length === 0, errors };
+}
+
+export interface CandidateMeasurement {
+  fits: boolean;
+  /** renderedWidth / availableWidth */
+  fillRatio: number;
+}
+
+export type MeasureTailoredCandidate = (
+  text: string,
+  context: { roleRef: number; sourceRefs: readonly ResumeSourceRef[] },
+) => CandidateMeasurement;
+
+export interface SelectedTailoredClaim {
+  roleRef: number;
+  sourceRefs: ResumeSourceRef[];
+  candidate: TailoredCandidate;
+  fillRatio: number;
+}
+
+export interface FinalizedTailoredEditorialPlan {
+  resume: StructuredResume;
+  omissions: TailoredOmission[];
+  selectedClaims: SelectedTailoredClaim[];
+  audit: TailoredEditorialAudit;
+}
+
+function applyExplicitOmissions(resume: StructuredResume, omissions: readonly TailoredOmission[]): StructuredResume {
+  const refs = new Set(omissions.map((omission) => omission.sourceRef));
+  return {
+    ...resume,
+    summary: refs.has('summary') ? '' : resume.summary,
+    awards: resume.awards.filter((_, index) => !refs.has(`award:${index}`)),
+    experience: resume.experience.map((experience, roleIndex) => ({
+      ...experience,
+      scope: refs.has(`experience:${roleIndex}:scope`) ? undefined : experience.scope,
+    })),
+    projects: resume.projects.flatMap((project, projectIndex) =>
+      refs.has(`project:${projectIndex}`)
+        ? []
+        : [{
+            ...project,
+            scope: refs.has(`project:${projectIndex}:scope`) ? undefined : project.scope,
+            bullets: project.bullets.filter(
+              (_, bulletIndex) => !refs.has(`project:${projectIndex}:bullet:${bulletIndex}`),
+            ),
+          }],
+    ),
+    education: resume.education.filter((_, index) => !refs.has(`education:${index}`)),
+    skills: resume.skills
+      .map((group, groupIndex) => ({
+        ...group,
+        items: group.items.filter((_, itemIndex) => !refs.has(`skill:${groupIndex}:${itemIndex}`)),
+      }))
+      .filter((group) => group.items.length > 0),
+  };
+}
+
+/**
+ * Converts a valid one-call plan into the canonical resume. Fails closed when any claim has no exact
+ * single-line fit; it never wraps, rewrites, merges, drops, or asks the LLM to repair the result.
+ */
+export function finalizeTailoredEditorialPlan(
+  source: StructuredResume,
+  plan: TailoredEditorialPlan,
+  measure: MeasureTailoredCandidate,
+  opts: TailorIngestOptions & { preferredMinFillRatio?: number } = {},
+): FinalizedTailoredEditorialPlan | null {
+  const validation = validateTailoredEditorialPlan(source, plan, opts.evidence ?? []);
+  if (!validation.ok) return null;
+  const preferredMin = opts.preferredMinFillRatio ?? 0.75;
+  const experience: TailoredExperience[] = [];
+  const selectedClaims: SelectedTailoredClaim[] = [];
+
+  for (const role of plan.experience) {
+    const bullets: string[] = [];
+    for (const claim of role.claims) {
+      const measured = claim.candidates
+        .map((candidate) => ({ candidate, ...measure(candidate.text, { roleRef: role.ref, sourceRefs: claim.sourceRefs }) }))
+        .filter((candidate) => candidate.fits && candidate.fillRatio > 0);
+      if (!measured.length) return null;
+      const preferred = measured.filter((candidate) => candidate.fillRatio >= preferredMin);
+      const chosen = preferred.length
+        ? preferred.sort((a, b) => b.fillRatio - a.fillRatio || a.candidate.rank - b.candidate.rank)[0]
+        : measured.sort((a, b) => b.fillRatio - a.fillRatio || a.candidate.rank - b.candidate.rank)[0];
+      bullets.push(chosen.candidate.text);
+      selectedClaims.push({
+        roleRef: role.ref,
+        sourceRefs: [...claim.sourceRefs],
+        candidate: chosen.candidate,
+        fillRatio: chosen.fillRatio,
+      });
+    }
+    experience.push({ ref: role.ref, ...(role.scope ? { scope: role.scope } : {}), bullets });
+  }
+
+  const summary = plan.summaryCandidates?.[0]?.text;
+  const applied = applyTailoredResume(source, { ...(summary ? { summary } : {}), experience }, opts);
+  const resume = applyExplicitOmissions(applied, plan.omissions);
+  return { resume, omissions: [...plan.omissions], selectedClaims, audit: plan.audit };
+}
+
 // Re-stitch a tailored patch onto the structured source, producing a new StructuredResume that the
 // deterministic renderer (createStructuredResumePdf) can draw. The truthfulness guarantee lives
 // HERE, not in the prompt: every structural fact (contact, awards, projects, education, skills, and
@@ -493,29 +1031,9 @@ function mergeConfirmedSkills(skills: ResumeSkillGroup[], confirmed: readonly st
   return skills.map((group, i) => (i === 0 ? { ...group, items: [...group.items, ...fresh] } : group));
 }
 
-// A model can still return an action and its impact as adjacent bullets despite the editorial
-// contract. These leading participles/result phrases are grammatical continuations, not independent
-// résumé accomplishments (the production failure was `Led … model` + `Driving $15M …`). Merge only
-// that narrow, deterministic class back into the preceding bullet. This preserves every word and
-// metric; it does not attempt to "write" résumé prose or merge a second past-tense action.
-const DANGLING_IMPACT_START = /^(?:achieving|boosting|contributing|creating|cutting|delivering|driving|enabling|generating|improving|increasing|leading\s+to|reducing|resulting\s+in|saving|yielding)\b/i;
-
+// Legacy patch safety only: reject dangling fragments; never mechanically splice prose.
 export function cohereTailoredBullets(bullets: readonly string[]): string[] {
-  const coherent: string[] = [];
-  for (const raw of bullets) {
-    const bullet = raw.trim();
-    if (!bullet) continue;
-    const prior = coherent[coherent.length - 1];
-    if (!prior || !DANGLING_IMPACT_START.test(bullet)) {
-      coherent.push(bullet);
-      continue;
-    }
-
-    const stem = prior.replace(/[\s,;:—.]+$/, '');
-    const continuation = bullet.replace(/^([A-Z])/, (letter) => letter.toLowerCase());
-    coherent[coherent.length - 1] = `${stem}, ${continuation}`;
-  }
-  return coherent;
+  return bullets.map((bullet) => bullet.trim()).filter((bullet) => bullet && !isDanglingImpactFragment(bullet));
 }
 
 export function applyTailoredResume(

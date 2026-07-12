@@ -303,7 +303,9 @@ const TAILOR_BODY = {
   action: 'tailor',
   model: 'anthropic/claude-sonnet-4-6',
   application_id: 'app-1',
-  included_categories: ['job-description', 'profile-summary', 'work-history', 'skills'],
+  included_categories: [
+    'job-description', 'profile-summary', 'work-history', 'skills', 'education', 'resume',
+  ],
   messages: [
     { role: 'system', content: 'no fabrication' },
     { role: 'user', content: 'JD + profile' },
@@ -343,13 +345,41 @@ test('tailor: audit lands before egress with the right slug/manifest, streams on
   assert.deepEqual(order, ['audit', 'provider', 'cost'], 'audit before egress; cost backfilled after');
   assert.equal(audits[0]?.action, 'tailor-resume', 'privacy-log slug for the tailor action');
   assert.equal(audits[0]?.applicationId, 'app-1');
-  assert.deepEqual(audits[0]?.manifest.sent, ['job-description', 'profile-summary', 'work-history', 'skills']);
+  assert.deepEqual(
+    audits[0]?.manifest.sent,
+    ['job-description', 'profile-summary', 'work-history', 'skills', 'education', 'resume'],
+  );
   assert.match(audits[0]?.payloadSha256 ?? '', /^[0-9a-f]{64}$/);
   assert.equal(audits[0]?.costUsd ?? null, null, 'cost is null at pre-egress write time');
   assert.deepEqual(costUpdates, [{ id: 'audit-9', cost: 0.0123 }], 'real cost backfilled onto the row');
   const joined = res.chunks.join('');
   assert.match(joined, /"token":"# Résumé"/);
   assert.match(joined, /data: \[DONE\]/);
+});
+
+test('tailor: the single holistic call gets a complete-plan token budget (no repair call)', async () => {
+  process.env.OPENROUTER_API_KEY = 'test-key';
+  let providerBody: Record<string, unknown> | null = null;
+  const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+    providerBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    const enc = new TextEncoder();
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(enc.encode('data: {"choices":[{"delta":{"content":"{}"}}]}\n'));
+        controller.enqueue(enc.encode('data: [DONE]\n'));
+        controller.close();
+      },
+    }), { status: 200 });
+  }) as unknown as typeof fetch;
+
+  await handleLlm(
+    mockReq('Bearer good-token', TAILOR_BODY),
+    mockRes() as never,
+    deps({ verifyToken: async () => VALID_USER, fetchImpl }),
+  );
+
+  const sentBody = providerBody as Record<string, unknown> | null;
+  assert.equal(sentBody?.max_tokens, 6000);
 });
 
 test('tailor: audit failure fails closed — 503, no provider egress', async () => {
