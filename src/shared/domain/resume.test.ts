@@ -9,10 +9,13 @@ import {
   type StructuredResume,
 } from './resume';
 import {
+  analyzeStructuredResumeBulletWidths,
+  analyzeStructuredResumeLayout,
   createStructuredResumePdf,
   splitMetricRuns,
+  STRUCTURED_RESUME_BULLET_AVAILABLE_WIDTH_MM,
+  STRUCTURED_RESUME_BULLET_FONT_SIZE_PT,
   structuredResumePdfBytes,
-  wrapBulletForWidth,
 } from '../../features/tailor/resumePdf';
 
 const resume = JSON.parse(
@@ -88,9 +91,6 @@ test('flattenResumeText draws only content present in the structured source', ()
 test('createStructuredResumePdf renders a single-column A4 vector PDF', () => {
   const pdf = createStructuredResumePdf(resume);
   assert.equal(Math.round(pdf.internal.pageSize.getWidth()), 210);
-  const bytes = structuredResumePdfBytes(resume);
-  assert.equal(new TextDecoder().decode(bytes.slice(0, 5)), '%PDF-');
-  assert.ok(bytes.byteLength > 1_000);
 });
 
 test('long content paginates instead of clipping', () => {
@@ -110,56 +110,102 @@ test('long content paginates instead of clipping', () => {
   assert.ok(pdf.getNumberOfPages() > 1, 'long content should paginate');
 });
 
-test('the real fixture résumé renders on exactly ONE A4 page (B6.4-R)', () => {
+test('the representative redacted fixture is not tiny-text compressed onto one A4 page', () => {
   const interBase64 = readFileSync('src/assets/InterVariable.ttf').toString('base64');
-  // With the bundled font (the production path) the full real résumé must fit on a single page.
-  assert.equal(createStructuredResumePdf(resume, interBase64).getNumberOfPages(), 1);
-  // …and the same with the fallback font, so the one-page invariant never depends on font loading.
-  assert.equal(createStructuredResumePdf(resume).getNumberOfPages(), 1);
+  // The pre-tailoring source is intentionally too dense. It must fail visibly rather than silently
+  // shrinking to the rejected 60% scale; the holistic editor is responsible for a truthful one-page
+  // selection before the result can pass the final gate.
+  assert.ok(createStructuredResumePdf(resume, interBase64).getNumberOfPages() > 1);
+  assert.ok(createStructuredResumePdf(resume).getNumberOfPages() > 1);
 });
 
-// --- semantic bullets: visual wrapping never creates a second bullet (2026-07-02 repair) ---------
+// --- strict single-line semantic bullets (2026-07-02 editorial repair) --------------------------
 
-test('wrapBulletForWidth keeps a fitting semantic bullet whole', () => {
-  const measure = (line: string) => line.length; // width == char count
-  assert.deepEqual(wrapBulletForWidth('Short bullet.', 40, measure), ['Short bullet.']);
-});
-
-test('wrapBulletForWidth wraps visually without changing words or semantic bullet identity', () => {
-  const measure = (line: string) => line.length;
-  const bullet =
-    'Led end-to-end development of an s-learner XGBoost model, driving $15M in annual revenue.';
-  const lines = wrapBulletForWidth(bullet, 60, measure);
-  assert.equal(lines.length, 2);
-  assert.ok(lines.every((line) => measure(line) <= 60));
-  assert.equal(lines.join(' '), bullet, 'visual wrapping must preserve the semantic bullet verbatim');
-  assert.match(lines[1], /\$15M/, 'the continuation carries the metric without becoming a new bullet');
-});
-
-test('wrapBulletForWidth never breaks a decimal/metric token', () => {
-  const measure = (line: string) => line.length;
-  const lines = wrapBulletForWidth('Improved lift by 41.25% and cut cost by 18%.', 30, measure);
-  assert.match(lines.join(' '), /41\.25%/);
-});
-
-test('an unsplittable over-wide clause stays one bullet (caller floor-shrinks it, no clip)', () => {
-  const measure = (line: string) => line.length;
-  const oneClause = 'Supercalifragilisticexpialidocious'.repeat(3);
-  assert.deepEqual(wrapBulletForWidth(oneClause, 10, measure), [oneClause]);
-});
-
-test('a résumé with long bullets still renders on exactly ONE A4 page (uniform sizing holds fit)', () => {
+test('exact Inter/jsPDF width contract distinguishes fit from overflow without rewriting', () => {
   const interBase64 = readFileSync('src/assets/InterVariable.ttf').toString('base64');
-  const longBullets: StructuredResume = {
-    ...resume,
-    experience: resume.experience.map((exp) => ({
-      ...exp,
-      bullets: exp.bullets.map(
-        (b) => `${b} Additionally partnered with cross-functional stakeholders, drove adoption, and documented the approach.`,
-      ),
-    })),
+  const [fit, overflow] = analyzeStructuredResumeBulletWidths([
+    'Built a useful model that drove $15M in revenue.',
+    'This deliberately overlong semantic bullet '.repeat(12).trim(),
+  ], interBase64);
+  assert.equal(fit.availableWidthMm, STRUCTURED_RESUME_BULLET_AVAILABLE_WIDTH_MM);
+  assert.ok(fit.measuredWidthMm > 0);
+  assert.ok(fit.fillRatio < 1);
+  assert.equal(fit.overflowMm, 0);
+  assert.equal(fit.fitsSingleLine, true);
+  assert.ok(overflow.measuredWidthMm > overflow.availableWidthMm);
+  assert.ok(overflow.fillRatio > 1);
+  assert.ok(overflow.overflowMm > 0);
+  assert.equal(overflow.fitsSingleLine, false);
+});
+
+test('both approved semantic rewrites fit one Inter line and nearly fill it', () => {
+  const interBase64 = readFileSync('src/assets/InterVariable.ttf').toString('base64');
+  const approved = [
+    'Built an S-learner XGBoost balance model that improved targeting precision and drove $15M in annual incremental revenue.',
+    'Built a GPT-powered feature discovery solution that generated 10+ novel features for the high-spend decliner segment.',
+  ];
+  const measurements = analyzeStructuredResumeBulletWidths(approved, interBase64);
+  assert.deepEqual(measurements.map((item) => item.text), approved);
+  assert.ok(measurements.every((item) => item.fitsSingleLine));
+  assert.ok(measurements.every((item) => item.fillRatio >= 0.9 && item.fillRatio <= 1.001));
+});
+
+test('representative structured fixture uses normal typography and exposes page and bullet overflow', () => {
+  const interBase64 = readFileSync('src/assets/InterVariable.ttf').toString('base64');
+  const diagnostics = analyzeStructuredResumeLayout(resume, interBase64);
+  assert.ok(diagnostics.pageCount > 1);
+  assert.equal(diagnostics.fitsSinglePage, false);
+  assert.equal(diagnostics.hasPageOverflow, true);
+  assert.equal(diagnostics.bulletFontSizePt, STRUCTURED_RESUME_BULLET_FONT_SIZE_PT);
+  assert.ok(diagnostics.bulletFontSizePt >= 8);
+  assert.ok(diagnostics.minRelevantFontSizePt >= 7);
+  assert.ok(diagnostics.contentBottomMm <= diagnostics.usableBottomMm);
+  assert.ok(diagnostics.utilization > 1);
+  assert.ok(diagnostics.overflows.length > 0, 'the rejected legacy wording must fail the strict gate');
+  assert.equal(diagnostics.hasClipping, true);
+  assert.equal(diagnostics.isValid, false);
+});
+
+test('the full redacted fixture is rejected before public structured-PDF bytes', () => {
+  const interBase64 = readFileSync('src/assets/InterVariable.ttf').toString('base64');
+  assert.throws(
+    () => structuredResumePdfBytes(resume, interBase64),
+    /Structured résumé PDF blocked: \d+ bullets exceeded the measured line width\./,
+  );
+  // The diagnostic renderer remains available to measure the rejected document.
+  assert.ok(createStructuredResumePdf(resume, interBase64).getNumberOfPages() > 1);
+});
+
+test('a complete-section one-page result with approved bullets passes without clipping', () => {
+  const interBase64 = readFileSync('src/assets/InterVariable.ttf').toString('base64');
+  const approved: StructuredResume = {
+    contact: { fullName: 'Test User', title: 'Data Scientist', links: [], location: 'India' },
+    summary: 'Data scientist building measurable, production-ready machine-learning products.',
+    awards: [{ title: 'Impact Award', detail: 'Recognized for measurable commercial results' }],
+    experience: [{
+      org: 'Example Company',
+      location: 'India',
+      title: 'Data Scientist',
+      start: '2024',
+      end: 'Present',
+      bullets: [
+        'Built an S-learner XGBoost balance model that improved targeting precision and drove $15M in annual incremental revenue.',
+        'Built a GPT-powered feature discovery solution that generated 10+ novel features for the high-spend decliner segment.',
+      ],
+    }],
+    projects: [{ name: 'Modeling Project', bullets: ['Built a reproducible model evaluation pipeline.'] }],
+    education: [{ school: 'Example University', degree: 'BSc, Statistics', start: '2021', end: '2024' }],
+    skills: [{ label: 'Modeling', items: ['XGBoost', 'Python', 'Experimentation'] }],
   };
-  assert.equal(createStructuredResumePdf(longBullets, interBase64).getNumberOfPages(), 1);
+  const diagnostics = analyzeStructuredResumeLayout(approved, interBase64);
+  assert.equal(diagnostics.pageCount, 1);
+  assert.equal(diagnostics.hasPageOverflow, false);
+  assert.equal(diagnostics.overflows.length, 0);
+  assert.equal(diagnostics.hasClipping, false);
+  assert.equal(diagnostics.isValid, true);
+  const bytes = structuredResumePdfBytes(approved, interBase64);
+  assert.equal(new TextDecoder().decode(bytes.slice(0, 5)), '%PDF-');
+  assert.ok(bytes.byteLength > 1_000);
 });
 
 test('splitMetricRuns bolds metric tokens and leaves prose normal (B6.4-R)', () => {

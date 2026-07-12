@@ -2,10 +2,16 @@ import interFontUrl from '../../assets/InterVariable.ttf?url';
 import type { ResumeDocument } from './resumeDocument';
 import type { StructuredResume } from '../../shared/domain/resume';
 import {
+  analyzeStructuredResumeBulletWidths,
+  analyzeStructuredResumeLayout,
   downloadResumePdf,
   downloadStructuredResumePdf,
+  getStructuredResumeLayoutContract,
   resumePdfBytes,
   structuredResumePdfBytes,
+  type StructuredResumeBulletWidth,
+  type StructuredResumeLayoutContract,
+  type StructuredResumeLayoutDiagnostics,
 } from './resumePdf';
 
 let interFontPromise: Promise<string> | null = null;
@@ -41,6 +47,28 @@ export async function downloadBrowserResumePdf(document: ResumeDocument, filenam
 // preview consume the same StructuredResume, so download and preview never drift.
 export async function browserStructuredResumePdfBytes(resume: StructuredResume): Promise<Uint8Array> {
   return structuredResumePdfBytes(resume, await loadInterFontBase64());
+}
+
+/** Exact production layout contract supplied to the single holistic tailoring call. */
+export async function browserStructuredResumeLayoutContract(): Promise<StructuredResumeLayoutContract> {
+  // Load the bundled font now so a missing/corrupt asset fails before provider egress, not after the
+  // model has already produced a result that cannot be measured or rendered faithfully.
+  await loadInterFontBase64();
+  return getStructuredResumeLayoutContract();
+}
+
+/** Exact candidate widths using the same bundled Inter bytes as preview/download. */
+export async function browserAnalyzeStructuredResumeBulletWidths(
+  candidates: readonly string[],
+): Promise<StructuredResumeBulletWidth[]> {
+  return analyzeStructuredResumeBulletWidths(candidates, await loadInterFontBase64());
+}
+
+/** Strict one-page/one-line pre-persist gate using the production font and renderer. */
+export async function browserAnalyzeStructuredResumeLayout(
+  resume: StructuredResume,
+): Promise<StructuredResumeLayoutDiagnostics> {
+  return analyzeStructuredResumeLayout(resume, await loadInterFontBase64());
 }
 
 export async function downloadBrowserStructuredResumePdf(

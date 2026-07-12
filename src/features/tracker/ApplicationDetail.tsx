@@ -301,7 +301,10 @@ export default function ApplicationDetail({ application, onClose, onEdit, onChan
       <TailorFlow
         application={application}
         onClose={() => setTailoring(false)}
-        onArtifactSaved={(artifact) => setArtifacts((current) => [artifact, ...current])}
+        onArtifactSaved={(artifact) => setArtifacts((current) => [
+          artifact,
+          ...current.filter((existing) => existing.id !== artifact.id),
+        ])}
       />
     );
   }

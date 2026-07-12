@@ -22,15 +22,18 @@ import {
   buildTailorMessages,
   buildTailorResumeMessages,
   evidenceLikelyRecoverable,
+  finalizeTailoredEditorialPlan,
   isCloseFit,
-  pruneOptionalForRelevance,
-  tailorStructuredResume,
+  parseTailoredEditorialPlan,
   TAILOR_ACTIONS,
   TAILOR_ACTION_LABEL,
   TAILOR_PRIVACY_ACTION,
   tailorIncludedCategories,
   type TailorAction,
   type TailorContext,
+  type ResumeSourceRef,
+  type SelectedTailoredClaim,
+  type TailoredOmission,
 } from '../../shared/domain/tailor';
 import {
   buildStructuredResumeDocument,
@@ -55,7 +58,11 @@ import { ModalShell } from '../tracker/ApplicationForm';
 import { DEFAULT_SETTINGS_FORM, modelLabel, settingsToForm } from '../settings/settings';
 import StructuredResumePreview from './StructuredResumePreview';
 import TailorReview from './TailorReview';
-import { insertTailorArtifact, updateTailorArtifact } from './tailorArtifacts';
+import {
+  insertTailorArtifact,
+  serializeTailoredResumeArtifact,
+  updateTailorArtifact,
+} from './tailorArtifacts';
 
 interface TailorFlowProps {
   application: Application;
@@ -86,6 +93,8 @@ const KIT_PRIVACY_MANIFEST: PrivacyManifest = buildManifest([
   'profile-summary',
   'work-history',
   'skills',
+  'education',
+  'resume',
   'contact-info',
 ]);
 
@@ -132,6 +141,8 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
   // The applied tailored StructuredResume for THIS run — drives the preview + download + the JSON
   // persisted in the artifact, so preview == download (B6.4 AC#3/#4).
   const [tailoredResume, setTailoredResume] = useState<StructuredResume | null>(null);
+  const [tailoredOmissions, setTailoredOmissions] = useState<TailoredOmission[]>([]);
+  const [selectedClaims, setSelectedClaims] = useState<SelectedTailoredClaim[]>([]);
   // The saved tailored-résumé artifact id, captured at its initial save so review edits/restores can
   // re-persist onto the SAME row (G3-persistence: stored artifact == preview == download).
   const [tailorArtifactId, setTailorArtifactId] = useState<string | null>(null);
@@ -152,7 +163,10 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
   const [auditNote, setAuditNote] = useState<string | null>(null);
   const [copyNote, setCopyNote] = useState<string | null>(null);
   const [pdfOpen, setPdfOpen] = useState(false);
+  const [reviewSync, setReviewSync] = useState<'saved' | 'checking' | 'invalid' | 'saving'>('saved');
   const abortRef = useRef<AbortController | null>(null);
+  const reviewRevisionRef = useRef(0);
+  const persistChainRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     if (!user) return;
@@ -313,8 +327,21 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
     setStatuses((current) => ({ ...current, [action]: 'streaming' }));
     setFlowError(null);
     setAuditNote(null);
+    if (structuredTailor) {
+      setTailoredResume(null);
+      setTailoredOmissions([]);
+      setSelectedClaims([]);
+      setTailorArtifactId(null);
+    }
 
     try {
+      // Use the production Inter/layout seam before egress. If the bundled font cannot load, fail
+      // before spending the one allowed tailoring call.
+      const pdfBrowser = structuredTailor ? await import('./resumePdfBrowser') : null;
+      const layout = pdfBrowser ? await pdfBrowser.browserStructuredResumeLayoutContract() : null;
+      const sourceLayout = pdfBrowser && structuredResume
+        ? await pdfBrowser.browserAnalyzeStructuredResumeLayout(structuredResume)
+        : null;
       await streamLlm({
         action,
         model: settings.model,
@@ -329,6 +356,17 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
               truthfulAdditions: folded?.truthfulAdditions ?? [],
               // G2: adapt the summary to a close fit (tighten/omit) vs. a stretch (keep the bridge).
               closeFit,
+              bulletLayout: layout ? {
+                availableWidthMm: layout.bulletAvailableWidthMm,
+                fontFamily: 'Inter',
+                fontSizePt: layout.bulletFontSizePt,
+                preferredMinFillRatio: layout.preferredBulletFillRatio.min,
+                pageWidthMm: layout.pageWidthMm,
+                pageHeightMm: layout.pageHeightMm,
+                minPageUtilization: 0.72,
+                sourcePageCount: sourceLayout?.pageCount,
+                sourceUtilization: sourceLayout?.utilization,
+              } : undefined,
             })
           : buildTailorMessages(context),
         includedCategories: tailorIncludedCategories(context),
@@ -344,25 +382,56 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
       });
       if (!content.trim()) throw new Error('The model returned an empty document.');
 
-      // For the résumé action, re-stitch the patch onto the source (the truthfulness guard lives in
-      // tailorStructuredResume) → persist the applied StructuredResume as JSON so it re-renders
-      // deterministically; show the flattened, readable résumé text in the panel + Copy.
+      // Strictly finalize the one-call editorial plan before anything is shared or saved. There is no
+      // automatic repair call and no fallback that labels the unedited source as a tailored result.
       let persistContent = content;
+      let finalizedResume: StructuredResume | null = null;
+      let finalizedOmissions: TailoredOmission[] = [];
+      let finalizedSelectedClaims: SelectedTailoredClaim[] = [];
       if (structuredTailor) {
+        if (!pdfBrowser || !layout) throw new Error('The résumé layout contract could not be loaded.');
         const additions = folded?.truthfulAdditions ?? [];
-        const tailored = tailorStructuredResume(structuredResume as StructuredResume, content, {
-          // Evidence extends the grounding corpus so the user's own numbers/terms pass the guard;
-          // confirmed skill labels are added to the Skills section deterministically (G1).
-          evidence: additions.map((a) => a.evidence),
-          skills: additions.map((a) => skillLabel(a.skill)),
-        });
-        // G2: prune the LESS-relevant optional content (skills/projects/awards) and adapt the summary
-        // to hold one legible page — full employment + education chronology is preserved.
-        const optimized = pruneOptionalForRelevance(tailored, application.jd_text ?? '', { closeFit });
-        setTailoredResume(optimized);
-        persistContent = JSON.stringify(optimized);
-        const readable = flattenResumeText(buildStructuredResumeDocument(optimized)).join('\n');
-        setOutputs((current) => ({ ...current, [action]: readable }));
+        const plan = parseTailoredEditorialPlan(content);
+        if (!plan) throw new Error('The model returned an incomplete editorial plan. Nothing was saved.');
+        const candidateTexts = plan.experience.flatMap((rolePlan) =>
+          rolePlan.claims.flatMap((claim) => claim.candidates.map((candidate) => candidate.text)),
+        );
+        const measured = await pdfBrowser.browserAnalyzeStructuredResumeBulletWidths(candidateTexts);
+        const byText = new Map(measured.map((item) => [item.text, item]));
+        const finalized = finalizeTailoredEditorialPlan(
+          structuredResume as StructuredResume,
+          plan,
+          (text) => {
+            const width = byText.get(text.trim());
+            return width
+              ? { fits: width.fitsSingleLine, fillRatio: width.fillRatio }
+              : { fits: false, fillRatio: Number.POSITIVE_INFINITY };
+          },
+          {
+            evidence: additions.map((addition) => addition.evidence),
+            skills: additions.map((addition) => skillLabel(addition.skill)),
+            preferredMinFillRatio: layout.preferredBulletFillRatio.min,
+          },
+        );
+        if (!finalized) {
+          throw new Error(
+            'The model could not produce a complete, truthful set of single-line bullets. Nothing was saved.',
+          );
+        }
+        const diagnostics = await pdfBrowser.browserAnalyzeStructuredResumeLayout(finalized.resume);
+        if (!diagnostics.isValid) {
+          const detail = diagnostics.overflows.length
+            ? `${diagnostics.overflows.length} bullet${diagnostics.overflows.length === 1 ? '' : 's'} exceeded the measured line width.`
+            : `The result used ${diagnostics.pageCount} pages.`;
+          throw new Error(`The tailored résumé did not pass the strict A4 layout gate. ${detail} Nothing was saved.`);
+        }
+        if (diagnostics.utilization < 0.72) {
+          throw new Error('The tailored résumé left conspicuous empty space on the page. Nothing was saved.');
+        }
+        finalizedResume = finalized.resume;
+        finalizedOmissions = finalized.omissions;
+        finalizedSelectedClaims = finalized.selectedClaims;
+        persistContent = serializeTailoredResumeArtifact(finalized.resume);
       }
 
       const artifact = await insertTailorArtifact({
@@ -376,6 +445,12 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
       if (structuredTailor) {
         setTailorArtifactId(artifact.id);
         lastPersistedRef.current = persistContent;
+        setTailoredResume(finalizedResume);
+        setTailoredOmissions(finalizedOmissions);
+        setSelectedClaims(finalizedSelectedClaims);
+        setReviewSync('saved');
+        const readable = flattenResumeText(buildStructuredResumeDocument(finalizedResume!)).join('\n');
+        setOutputs((current) => ({ ...current, [action]: readable }));
       }
       onArtifactSaved(artifact);
       setStatuses((current) => ({ ...current, [action]: 'saved' }));
@@ -400,28 +475,186 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
     }
   }
 
-  // G3-persistence: every review edit/restore updates the in-memory tailored résumé (so the canvas
-  // preview and the PDF download stay identical) AND re-persists it onto the saved artifact row, so
-  // the stored copy never drifts from what the user actually downloads. Skipped when nothing changed
-  // (e.g. a restore that produced identical bytes) to avoid a redundant write.
+  // Review changes become a draft immediately, then pass the SAME strict Inter/A4 gate before they
+  // can replace the persisted/preview/download canonical revision. Writes are serialized so an older
+  // keystroke can never land after a newer one.
   const lastPersistedRef = useRef<string | null>(null);
   function handleTailoredChange(next: StructuredResume) {
     setTailoredResume(next);
-    // Keep the scrollable readable text panel in lock-step with the canvas preview + PDF: re-flatten
-    // the edited/restored résumé the same way generation did, so an edit/restore is reflected live
-    // (previously the panel kept showing the pre-edit text until the flow was reopened).
     const readable = flattenResumeText(buildStructuredResumeDocument(next)).join('\n');
     setOutputs((current) => ({ ...current, tailor: readable }));
-    if (!tailorArtifactId) return;
-    const content = JSON.stringify(next);
-    if (content === lastPersistedRef.current) return;
-    lastPersistedRef.current = content;
-    void updateTailorArtifact({ artifactId: tailorArtifactId, content })
-      .then(() => setAuditNote('Tailored résumé updated. Your saved copy matches this download.'))
+    const revision = reviewRevisionRef.current + 1;
+    reviewRevisionRef.current = revision;
+    setReviewSync('checking');
+    setFlowError(null);
+    void import('./resumePdfBrowser')
+      .then(({ browserAnalyzeStructuredResumeLayout }) => browserAnalyzeStructuredResumeLayout(next))
+      .then((diagnostics) => {
+        if (revision !== reviewRevisionRef.current) return;
+        if (!diagnostics.isValid || diagnostics.utilization < 0.72) {
+          setReviewSync('invalid');
+          setFlowError(
+            'This draft no longer fits one readable A4 page with single-line bullets. It was not saved; edit or restore until the layout is valid.',
+          );
+          return;
+        }
+        const content = serializeTailoredResumeArtifact(next);
+        if (!tailorArtifactId || content === lastPersistedRef.current) {
+          setReviewSync('saved');
+          return;
+        }
+        setReviewSync('saving');
+        persistChainRef.current = persistChainRef.current
+          .catch(() => undefined)
+          .then(async () => {
+            if (revision !== reviewRevisionRef.current) return;
+            const updated = await updateTailorArtifact({ artifactId: tailorArtifactId, content });
+            if (revision !== reviewRevisionRef.current) return;
+            lastPersistedRef.current = content;
+            onArtifactSaved(updated);
+            setReviewSync('saved');
+            setAuditNote('Tailored résumé updated. Your saved copy matches this download.');
+          })
+          .catch((error) => {
+            if (revision !== reviewRevisionRef.current) return;
+            setReviewSync('invalid');
+            setFlowError(error instanceof Error ? error.message : 'Could not save your edit.');
+          });
+      })
       .catch((error) => {
-        lastPersistedRef.current = null;
-        setFlowError(error instanceof Error ? error.message : 'Could not save your edit.');
+        if (revision !== reviewRevisionRef.current) return;
+        setReviewSync('invalid');
+        setFlowError(error instanceof Error ? error.message : 'Could not validate your edit.');
       });
+  }
+
+  function restoreOmission(ref: ResumeSourceRef) {
+    if (!structuredResume || !tailoredResume) return;
+    let next = tailoredResume;
+    if (ref === 'summary') {
+      next = { ...next, summary: structuredResume.summary };
+    } else {
+      let match = /^award:(\d+)$/.exec(ref);
+      if (match) {
+        const restoreIndex = Number(match[1]);
+        const present = new Set(next.awards.map((award) => `${award.title}\u0000${award.detail ?? ''}`));
+        next = {
+          ...next,
+          awards: structuredResume.awards.filter((award, index) =>
+            index === restoreIndex || present.has(`${award.title}\u0000${award.detail ?? ''}`),
+          ),
+        };
+      }
+      match = /^experience:(\d+):bullet:(\d+)$/.exec(ref);
+      if (match) {
+        const roleIndex = Number(match[1]);
+        const bulletIndex = Number(match[2]);
+        const role = next.experience[roleIndex];
+        const sourceBullet = structuredResume.experience[roleIndex]?.bullets[bulletIndex];
+        if (role && sourceBullet) {
+          const roleClaims = selectedClaims.filter((claim) => claim.roleRef === roleIndex);
+          const entries = role.bullets.map((text, index) => {
+            const sourceIndexes = roleClaims[index]?.sourceRefs.flatMap((sourceRef) => {
+              const sourceMatch = new RegExp(`^experience:${roleIndex}:bullet:(\\d+)$`).exec(sourceRef);
+              return sourceMatch ? [Number(sourceMatch[1])] : [];
+            }) ?? [];
+            return { text, order: sourceIndexes.length ? Math.min(...sourceIndexes) : Number.MAX_SAFE_INTEGER };
+          });
+          entries.push({ text: sourceBullet, order: bulletIndex });
+          entries.sort((a, b) => a.order - b.order);
+          next = {
+            ...next,
+            experience: next.experience.map((experience, index) =>
+              index === roleIndex ? { ...experience, bullets: entries.map((entry) => entry.text) } : experience,
+            ),
+          };
+        }
+      }
+      match = /^experience:(\d+):scope$/.exec(ref);
+      if (match) {
+        const roleIndex = Number(match[1]);
+        next = {
+          ...next,
+          experience: next.experience.map((experience, index) => index === roleIndex
+            ? { ...experience, scope: structuredResume.experience[roleIndex]?.scope }
+            : experience),
+        };
+      }
+      match = /^project:(\d+)$/.exec(ref);
+      if (match) {
+        const restoreIndex = Number(match[1]);
+        const present = new Set(next.projects.map((project) => project.name));
+        next = {
+          ...next,
+          projects: structuredResume.projects.filter((project, index) =>
+            index === restoreIndex || present.has(project.name),
+          ),
+        };
+      }
+      match = /^project:(\d+):(scope|bullet:(\d+))$/.exec(ref);
+      if (match) {
+        const projectIndex = Number(match[1]);
+        const sourceProject = structuredResume.projects[projectIndex];
+        if (sourceProject) {
+          const projects = [...next.projects];
+          let targetIndex = projects.findIndex((project) => project.name === sourceProject.name);
+          if (targetIndex < 0) {
+            projects.splice(Math.min(projectIndex, projects.length), 0, {
+              ...sourceProject,
+              bullets: match[2] === 'scope' ? [] : [sourceProject.bullets[Number(match[3])]],
+            });
+            targetIndex = Math.min(projectIndex, projects.length - 1);
+          } else if (match[2] === 'scope') {
+            projects[targetIndex] = { ...projects[targetIndex], scope: sourceProject.scope };
+          } else {
+            const restoreIndex = Number(match[3]);
+            const present = new Set(projects[targetIndex].bullets);
+            projects[targetIndex] = {
+              ...projects[targetIndex],
+              bullets: sourceProject.bullets.filter((bullet, index) =>
+                index === restoreIndex || present.has(bullet),
+              ),
+            };
+          }
+          next = { ...next, projects };
+        }
+      }
+      match = /^education:(\d+)$/.exec(ref);
+      if (match) {
+        const restoreIndex = Number(match[1]);
+        const present = new Set(next.education.map((education) => `${education.school}\u0000${education.degree}`));
+        next = {
+          ...next,
+          education: structuredResume.education.filter((education, index) =>
+            index === restoreIndex || present.has(`${education.school}\u0000${education.degree}`),
+          ),
+        };
+      }
+      match = /^skill:(\d+):(\d+)$/.exec(ref);
+      if (match) {
+        const groupIndex = Number(match[1]);
+        const itemIndex = Number(match[2]);
+        const sourceGroup = structuredResume.skills[groupIndex];
+        const sourceItem = sourceGroup?.items[itemIndex];
+        if (sourceGroup && sourceItem) {
+          const groups = [...next.skills];
+          const existingIndex = groups.findIndex((group) => group.label === sourceGroup.label);
+          if (existingIndex >= 0) {
+            const existing = groups[existingIndex];
+            const present = new Set(existing.items);
+            groups[existingIndex] = {
+              ...existing,
+              items: sourceGroup.items.filter((item, index) => index === itemIndex || present.has(item)),
+            };
+          } else {
+            groups.splice(Math.min(groupIndex, groups.length), 0, { ...sourceGroup, items: [sourceItem] });
+          }
+          next = { ...next, skills: groups };
+        }
+      }
+    }
+    setTailoredOmissions((current) => current.filter((omission) => omission.sourceRef !== ref));
+    handleTailoredChange(next);
   }
 
   async function copyActiveOutput() {
@@ -634,7 +867,11 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
                   </div>
                   <div className="flex gap-2">
                     <Button variant="secondary" size="sm" disabled={!outputs[activeTab]} onClick={() => void copyActiveOutput()}><Copy className="h-3.5 w-3.5" /> Copy</Button>
-                    <Button size="sm" disabled={!tailoredResume} onClick={() => { setActiveTab('tailor'); setPdfOpen(true); }}><Download className="h-3.5 w-3.5" /> Download PDF</Button>
+                    <Button
+                      size="sm"
+                      disabled={!tailoredResume || reviewSync !== 'saved'}
+                      onClick={() => { setActiveTab('tailor'); setPdfOpen(true); }}
+                    ><Download className="h-3.5 w-3.5" /> Download PDF</Button>
                   </div>
                 </div>
 
@@ -644,6 +881,9 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
                       source={structuredResume}
                       tailored={tailoredResume}
                       unsupportedJd={(resolutions?.futureSuggestions ?? []).map((s) => skillLabel(s))}
+                      omissions={tailoredOmissions}
+                      onRestoreOmission={restoreOmission}
+                      onRestoreAllOmissions={() => setTailoredOmissions([])}
                       onChange={handleTailoredChange}
                     />
                   </div>
@@ -668,8 +908,15 @@ export default function TailorFlow({ application, onClose, onArtifactSaved }: Ta
                 )}
 
                 <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-h-5 text-xs text-ink-faint" aria-live="polite">{copyNote ?? auditNote} {auditNote && <a href="/privacy" className="font-medium text-accent hover:underline">Open Privacy</a>}</div>
-                  <Button onClick={closeFlow}>Done</Button>
+                  <div className="min-h-5 text-xs text-ink-faint" aria-live="polite">
+                    {reviewSync === 'checking'
+                      ? 'Checking the one-page layout…'
+                      : reviewSync === 'saving'
+                        ? 'Saving the verified revision…'
+                        : (copyNote ?? auditNote)}{' '}
+                    {auditNote && reviewSync === 'saved' && <a href="/privacy" className="font-medium text-accent hover:underline">Open Privacy</a>}
+                  </div>
+                  <Button disabled={reviewSync === 'checking' || reviewSync === 'saving'} onClick={closeFlow}>Done</Button>
                 </div>
               </section>
             )}

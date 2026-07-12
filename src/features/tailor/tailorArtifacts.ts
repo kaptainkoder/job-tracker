@@ -1,36 +1,28 @@
 import type { Artifact, ArtifactKind } from '../../shared/types';
-import type { TailorAction } from '../../shared/domain/tailor';
 import { supabase } from '../../shared/lib/supabase';
+import {
+  artifactInsertPayload,
+  artifactUpdatePayload,
+  verifyUpdatedArtifact,
+  type ArtifactInsertInput,
+  type ArtifactUpdateInput,
+} from './tailorArtifactContent';
 
-export const ARTIFACT_KIND_BY_ACTION: Record<TailorAction, ArtifactKind> = {
-  tailor: 'tailored-resume',
-  cover: 'cover-letter',
-  prep: 'prep',
-};
+export {
+  ARTIFACT_KIND_BY_ACTION,
+  artifactInsertPayload,
+  artifactUpdatePayload,
+  serializeTailoredResumeArtifact,
+  verifyUpdatedArtifact,
+  type ArtifactInsertInput,
+  type ArtifactUpdateInput,
+} from './tailorArtifactContent';
 
 export const ARTIFACT_KIND_LABEL: Record<ArtifactKind, string> = {
   'tailored-resume': 'Tailored résumé',
   'cover-letter': 'Cover letter',
   prep: 'Interview prep',
 };
-
-export interface ArtifactInsertInput {
-  userId: string;
-  applicationId: string;
-  action: TailorAction;
-  content: string;
-  model: string;
-}
-
-export function artifactInsertPayload(input: ArtifactInsertInput) {
-  return {
-    user_id: input.userId,
-    application_id: input.applicationId,
-    kind: ARTIFACT_KIND_BY_ACTION[input.action],
-    content: input.content,
-    model: input.model,
-  };
-}
 
 export async function loadTailorArtifacts(applicationId: string): Promise<Artifact[]> {
   const { data, error } = await supabase
@@ -57,15 +49,13 @@ export async function insertTailorArtifact(input: ArtifactInsertInput): Promise<
 // SAME row so the stored artifact always equals what the preview renders and the PDF downloads
 // (preview == download == saved). Owner scoping is enforced by RLS; the id already came from an
 // owner-scoped insert this session.
-export interface ArtifactUpdateInput {
-  artifactId: string;
-  content: string;
-}
-
-export async function updateTailorArtifact(input: ArtifactUpdateInput): Promise<void> {
-  const { error } = await supabase
+export async function updateTailorArtifact(input: ArtifactUpdateInput): Promise<Artifact> {
+  const { data, error } = await supabase
     .from('artifacts')
-    .update({ content: input.content })
-    .eq('id', input.artifactId);
-  if (error) throw new Error(error.message);
+    .update(artifactUpdatePayload(input))
+    .eq('id', input.artifactId)
+    .select('*')
+    .single();
+  if (error || !data) throw new Error(error?.message ?? 'Artifact update returned no row.');
+  return verifyUpdatedArtifact(input, data);
 }
