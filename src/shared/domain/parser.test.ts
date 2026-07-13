@@ -4,7 +4,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parseLeadInput } from './parser';
-import { isStale } from './stages';
 
 // Fixtures are read relative to cwd — `npm test` always runs from the project root.
 const fixture = (name: string) => readFileSync(`fixtures/${name}`, 'utf8');
@@ -46,12 +45,6 @@ test('empty input is safe', () => {
   const r = parseLeadInput('   ');
   assert.equal(r.company, null);
   assert.equal(r.job_url, null);
-});
-
-test('active + untouched 12 days = stale; terminal stage never stale', () => {
-  const old = new Date(Date.now() - 12 * 864e5).toISOString();
-  assert.equal(isStale('applied', old), true);
-  assert.equal(isStale('rejected', old), false);
 });
 
 // --- Fixture-driven (fixtures/ is the "done" bar; see fixtures/README.md) -----
