@@ -120,3 +120,93 @@ test('computeFit is deterministic', () => {
   const b = computeFit({ jdText: fixture('close-fit-jd.txt'), evidence: DS_EVIDENCE });
   assert.deepEqual(a, b);
 });
+
+// --- Direct branch coverage -----------------------------------------------------------------
+
+test('ambiguous skill language is classified as unclear and explained', () => {
+  const r = computeFit({ jdText: 'Familiarity with Kubernetes', evidence: [] });
+  assert.equal(classOf(r, 'kubernetes')?.requirement, 'unclear');
+  assert.ok(r.notes.includes('Mentioned but ambiguous in the JD: Kubernetes.'));
+});
+
+test('nice-to-have header scopes following skills as preferred', () => {
+  const r = computeFit({ jdText: 'Nice to have:\n- Kubernetes', evidence: [] });
+  assert.equal(classOf(r, 'kubernetes')?.requirement, 'preferred');
+});
+
+test('requirements header resets preferred section scope', () => {
+  const r = computeFit({
+    jdText: 'Nice to have:\n- Kubernetes\nRequirements:\n- SQL',
+    evidence: [],
+  });
+  assert.equal(classOf(r, 'kubernetes')?.requirement, 'preferred');
+  assert.equal(classOf(r, 'sql')?.requirement, 'required');
+});
+
+test('two required skills with one direct skill produce medium confidence', () => {
+  const r = computeFit({ jdText: 'Requirements:\n- Python\n- SQL', evidence: ['Python'] });
+  assert.equal(r.requiredTotal, 2);
+  assert.equal(r.requiredEvidenced, 1);
+  assert.equal(r.confidence, 'medium');
+});
+
+test('four of five required skills is the High band boundary', () => {
+  const r = computeFit({
+    jdText: 'Requirements:\n- Python\n- SQL\n- Kubernetes\n- Terraform\n- AWS',
+    evidence: ['Python', 'SQL', 'Kubernetes', 'Terraform'],
+  });
+  assert.equal(r.requiredTotal, 5);
+  assert.equal(r.requiredEvidenced, 4);
+  assert.notEqual(r.adjacency, 'stretch');
+  assert.equal(r.band, 'High');
+});
+
+test('one of three required skills produces Low without a stretch', () => {
+  const r = computeFit({
+    jdText: 'Requirements:\n- Python\n- SQL\n- ETL',
+    evidence: ['Python'],
+  });
+  assert.equal(r.requiredTotal, 3);
+  assert.equal(r.requiredEvidenced, 1);
+  assert.equal(r.adjacency, 'same-track');
+  assert.equal(r.band, 'Low');
+});
+
+test('replacement, phase-out, and no-prior-experience clauses drop skills', () => {
+  const r = computeFit({
+    jdText: [
+      'We are replacing Docker with a managed platform.',
+      'We are phasing out Kubernetes.',
+      'No prior Terraform experience is required.',
+    ].join('\n'),
+    evidence: [],
+  });
+  assert.equal(classOf(r, 'docker'), undefined);
+  assert.equal(classOf(r, 'kubernetes'), undefined);
+  assert.equal(classOf(r, 'terraform'), undefined);
+});
+
+test('implied evidence counts toward required fit without becoming missing', () => {
+  const r = computeFit({
+    jdText: 'Requirements:\n- Machine learning\n- SQL',
+    evidence: ['XGBoost', 'SQL'],
+  });
+  assert.equal(classOf(r, 'machine-learning')?.evidence, 'inferable');
+  assert.equal(r.requiredTotal, 2);
+  assert.equal(r.requiredEvidenced, 2);
+  assert.ok(!r.missingRequired.some((c) => c.skill === 'machine-learning'));
+});
+
+test('empty and whitespace-only JDs return honest low-confidence results', () => {
+  for (const jdText of ['', ' \n\t ']) {
+    const r = computeFit({ jdText, evidence: DS_EVIDENCE });
+    assert.equal(r.requiredTotal, 0);
+    assert.equal(r.band, 'Low');
+    assert.equal(r.confidence, 'low');
+    assert.ok(
+      r.notes.includes(
+        'This posting lists no recognized required skills — fit cannot be asserted with confidence from the JD alone.',
+      ),
+    );
+  }
+});
