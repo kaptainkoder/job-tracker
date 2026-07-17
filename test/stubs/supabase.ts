@@ -6,6 +6,28 @@ const inserts = [];
 globalThis.__SUPABASE_INSERTS__ = inserts;
 const updates = [];
 globalThis.__SUPABASE_UPDATES__ = updates;
+const queries = [];
+const queuedResponses = [];
+globalThis.__SUPABASE_TEST__ = {
+  queries,
+  reset() {
+    inserts.length = 0;
+    updates.length = 0;
+    queries.length = 0;
+    queuedResponses.length = 0;
+  },
+  enqueue(table, result, operation = 'select') {
+    queuedResponses.push({ table, operation, result });
+  },
+  defer(table, operation = 'select') {
+    let resolve;
+    const result = new Promise((done) => {
+      resolve = done;
+    });
+    queuedResponses.push({ table, operation, result });
+    return { resolve };
+  },
+};
 globalThis.__SUPABASE_ROWS__ = {
   profile: {
     id: 'user-1',
@@ -63,42 +85,77 @@ globalThis.__SUPABASE_ROWS__ = {
 function makeBuilder(table) {
   const rows = globalThis.__SUPABASE_ROWS__;
   let inserted = null;
+  let operation = 'select';
+  let selected = null;
+  let payload = null;
+  const filters = [];
+  let ordering = null;
+  let execution = null;
+
+  function execute(defaultResult) {
+    if (!execution) {
+      queries.push({ table, operation, selected, filters: [...filters], order: ordering, payload });
+      const queuedIndex = queuedResponses.findIndex(
+        (candidate) => candidate.table === table && candidate.operation === operation,
+      );
+      if (queuedIndex >= 0) {
+        const [{ result }] = queuedResponses.splice(queuedIndex, 1);
+        execution = Promise.resolve(result);
+      } else {
+        execution = Promise.resolve(defaultResult());
+      }
+    }
+    return execution;
+  }
+
   const builder = {
-    select() {
+    select(columns = '*') {
+      selected = columns;
       return builder;
     },
-    eq() {
+    eq(column, value) {
+      filters.push({ column, value });
       return builder;
     },
-    update(payload) {
-      updates.push(payload);
+    update(nextPayload) {
+      operation = 'update';
+      updates.push(nextPayload);
+      payload = nextPayload;
       return builder;
     },
     delete() {
+      operation = 'delete';
       return builder;
     },
-    insert(payload) {
-      inserts.push(payload);
-      inserted = payload;
+    insert(nextPayload) {
+      operation = 'insert';
+      inserts.push(nextPayload);
+      inserted = nextPayload;
+      payload = nextPayload;
       return builder;
     },
-    order() {
+    order(column, options) {
+      ordering = { column, options };
       return builder;
     },
     maybeSingle() {
-      return Promise.resolve({ data: rows[table] ?? null, error: null });
+      return execute(() => ({ data: rows[table] ?? null, error: null }));
     },
     single() {
-      const data = inserted
-        ? { id: `artifact-${inserts.length}`, created_at: '2026-06-28T00:00:00Z', ...inserted }
-        : rows[table] ?? null;
-      if (inserted && table === 'artifacts') rows.artifacts.push(data);
-      return Promise.resolve({ data, error: null });
+      return execute(() => {
+        const data = inserted
+          ? { id: `artifact-${inserts.length}`, created_at: '2026-06-28T00:00:00Z', ...inserted }
+          : rows[table] ?? null;
+        if (inserted && table === 'artifacts') rows.artifacts.push(data);
+        return { data, error: null };
+      });
     },
     // Thenable: `await supabase.from(...).select().eq()` (and .insert()) resolve here.
     then(onFulfilled, onRejected) {
-      const data = Array.isArray(rows[table]) ? rows[table] : [];
-      return Promise.resolve({ data, error: null }).then(onFulfilled, onRejected);
+      return execute(() => ({
+        data: Array.isArray(rows[table]) ? rows[table] : [],
+        error: null,
+      })).then(onFulfilled, onRejected);
     },
   };
   return builder;
