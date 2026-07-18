@@ -6,6 +6,8 @@ const inserts = [];
 globalThis.__SUPABASE_INSERTS__ = inserts;
 const updates = [];
 globalThis.__SUPABASE_UPDATES__ = updates;
+const upserts = [];
+globalThis.__SUPABASE_UPSERTS__ = upserts;
 const queries = [];
 const queuedResponses = [];
 globalThis.__SUPABASE_TEST__ = {
@@ -13,6 +15,7 @@ globalThis.__SUPABASE_TEST__ = {
   reset() {
     inserts.length = 0;
     updates.length = 0;
+    upserts.length = 0;
     queries.length = 0;
     queuedResponses.length = 0;
   },
@@ -85,16 +88,22 @@ globalThis.__SUPABASE_ROWS__ = {
 function makeBuilder(table) {
   const rows = globalThis.__SUPABASE_ROWS__;
   let inserted = null;
+  let upserted = null;
   let operation = 'select';
   let selected = null;
   let payload = null;
+  let queryOptions = null;
   const filters = [];
   let ordering = null;
   let execution = null;
 
   function execute(defaultResult) {
     if (!execution) {
-      queries.push({ table, operation, selected, filters: [...filters], order: ordering, payload });
+      const record = { table, operation, selected, filters: [...filters], order: ordering, payload };
+      // Only upsert carries options ({onConflict}); omit the key elsewhere so existing deepEqual
+      // assertions on the recorded query shape (e.g. TrackerPage's select/insert checks) still pass.
+      if (operation === 'upsert') record.options = queryOptions;
+      queries.push(record);
       const queuedIndex = queuedResponses.findIndex(
         (candidate) => candidate.table === table && candidate.operation === operation,
       );
@@ -134,6 +143,14 @@ function makeBuilder(table) {
       payload = nextPayload;
       return builder;
     },
+    upsert(nextPayload, options = null) {
+      operation = 'upsert';
+      upserts.push(nextPayload);
+      upserted = nextPayload;
+      payload = nextPayload;
+      queryOptions = options;
+      return builder;
+    },
     order(column, options) {
       ordering = { column, options };
       return builder;
@@ -143,6 +160,7 @@ function makeBuilder(table) {
     },
     single() {
       return execute(() => {
+        if (upserted) return { data: upserted, error: null };
         const data = inserted
           ? { id: `artifact-${inserts.length}`, created_at: '2026-06-28T00:00:00Z', ...inserted }
           : rows[table] ?? null;
@@ -161,8 +179,39 @@ function makeBuilder(table) {
   return builder;
 }
 
+function defaultDownloadBlob() {
+  const bytes = new TextEncoder().encode('stub résumé bytes');
+  return {
+    async arrayBuffer() {
+      return bytes.buffer;
+    },
+  };
+}
+
+function makeStorageBucket(bucket) {
+  return {
+    download(path) {
+      const operation = 'download';
+      queries.push({ table: bucket, operation, selected: null, filters: [{ column: 'path', value: path }], order: null, payload: null });
+      const queuedIndex = queuedResponses.findIndex(
+        (candidate) => candidate.table === bucket && candidate.operation === operation,
+      );
+      if (queuedIndex >= 0) {
+        const [{ result }] = queuedResponses.splice(queuedIndex, 1);
+        return Promise.resolve(result);
+      }
+      return Promise.resolve({ data: defaultDownloadBlob(), error: null });
+    },
+  };
+}
+
 export const supabase = {
   from(table) {
     return makeBuilder(table);
+  },
+  storage: {
+    from(bucket) {
+      return makeStorageBucket(bucket);
+    },
   },
 };
