@@ -8,7 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "npm run test:parser && npm run test:stages && npm run test:auth && npm run test:profile && npm run test:profile-sync && npm run test:applications && npm run test:outcomes && npm run test:llm && npm run test:privacy && npm run test:privacy-presentation && npm run test:gap && npm run test:fit && npm run test:tailor && npm run test:resume-document && npm run test:resume && npm run test:resume-parse && npm run test:resume-pdf-links && npm run test:api-llm && npm run test:settings && npm run test:theme && npm run test:application-detail && npm run test:tracker-page && npm run test:tailor-flow && npm run test:resume-review && npm run test:resume-store",
+    "test": "npm run test:parser && npm run test:stages && npm run test:auth && npm run test:profile && npm run test:profile-sync && npm run test:applications && npm run test:outcomes && npm run test:llm && npm run test:privacy && npm run test:privacy-presentation && npm run test:gap && npm run test:fit && npm run test:tailor && npm run test:resume-document && npm run test:resume && npm run test:resume-parse && npm run test:resume-pdf-links && npm run test:api-llm && npm run test:settings && npm run test:theme && npm run test:application-detail && npm run test:tracker-page && npm run test:tailor-flow && npm run test:resume-review && npm run test:resume-store && npm run test:preflight-modal",
     "test:parser": "esbuild src/shared/domain/parser.test.ts --bundle --platform=node --format=esm | node --input-type=module",
     "test:stages": "esbuild src/shared/domain/stages.test.ts --bundle --platform=node --format=esm | node --input-type=module",
     "test:auth": "esbuild src/shared/domain/auth.test.ts --bundle --platform=node --format=esm | node --input-type=module",
@@ -34,6 +34,7 @@
     "test:tailor-flow": "node scripts/run-dom-test.mjs src/features/tailor/TailorFlow.test.tsx",
     "test:resume-review": "node scripts/run-dom-test.mjs src/features/resume/ResumeReviewPage.test.tsx",
     "test:resume-store": "node scripts/run-dom-test.mjs src/features/resume/resumeStore.test.ts",
+    "test:preflight-modal": "node scripts/run-dom-test.mjs src/shared/ui/PreflightModal.test.tsx",
     "gate": "npm run typecheck && npm run build && npm test"
   },
   "dependencies": {
