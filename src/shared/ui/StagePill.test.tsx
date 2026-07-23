@@ -117,7 +117,7 @@ async function main() {
     assert.ok(outer!.className.includes('inline-flex'));
     assert.ok(outer!.className.includes('text-ink-soft'));
     assert.ok(!outer!.className.includes('pill'));
-    assert.ok(!outer!.className.includes('bg-stage-applied/15'));
+    assert.doesNotMatch(outer!.className, /bg-stage-(?:lead|applied|interviewing|offer|rejected)\/15/);
   });
 
   await test('5: dotOnly label + dot — offer renders "Offer" and dot carries bg-stage-offer', async () => {
